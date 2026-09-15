@@ -7,45 +7,57 @@
 - 券商：银河证券 QMT 实盘（交易终端-北京）
 - 策略 Python：`#coding:gbk`，入口 `init` / `handlebar`
 - 不是 MiniQMT，不要用 `xtquant`
-- Web：Node（Express），准备部署到 Azure Web App
+- Web：Node（Express），已部署 [ptrade.console.enrichlife.today](https://ptrade.console.enrichlife.today/)
 
 ## 桥接系统（进行中）
 
-目标：QMT 只负责读写柜台；浏览器 UI 在 Azure 上，避免在 VM 里操作。
+目标：QMT 只 HTTP 打 Cloud；Cloud 把 JSON 写入 MySQL；Local / Cloud 都从 MySQL 读。
+
+```text
+QMT VM --POST--> Cloud Console --写--> MySQL
+Local Console  / Cloud UI      --读--> MySQL
+```
 
 | 编号 | 内容 | 状态 |
 |---|---|---|
-| [1] | QMT 拉挂盘/委托/成交并 POST 到服务器 | 策略已写，待 Azure 地址 |
-| [2] | 服务器下发挂单/撤单，QMT 执行 | 以后再做（`GET /api/commands` 现返回空） |
-| [3] | Web UI 展示挂盘/委托/成交 | 已有一页表格，1 秒刷新 |
-| [4] | QMT 推 debug log；本机每秒拉取落盘 | 已写 |
+| [1] | QMT 拉挂盘/委托/成交并 POST 到服务器 | 已通 |
+| [2] | 服务器下发挂单/撤单，QMT 执行 | 以后再做 |
+| [3] | Web UI 展示挂盘/委托/成交 | 已有表格；改读 MySQL |
+| [4] | debug 写入 `debug_log` 表 | 进行中 |
 
-QMT 始终当 HTTP 客户端往外连，不在 VM 里开端口。
+QMT 不直连数据库。策略不用改。
 
-券商客户端拉委托目前不需要我们这边的 token；**Azure 公网 API 建议设置 `BRIDGE_TOKEN`**，否则成交明细谁都能看。QMT 下单 token 以后做 [2] 再查。
+### MySQL（第一版两张表）
 
-### 本地起服务器
+- `sync_snapshot`：QMT JSON 原样入库（`account+stock` 一行最新快照）
+- `debug_log`：追加日志
+
+复制 `.env.example` 为 `.env`，填实例地址。Azure 控制台加同样的环境变量后重新部署。
 
 ```bash
+cp .env.example .env
 npm install
 npm start
 ```
 
-浏览器打开 http://127.0.0.1:3000
+启动时会自动建表。也可手动执行 `server/schema.sql`。
+
+Local 和 Cloud 用**同一套** `MYSQL_*`，本地 UI 才能看到 QMT 刚推到线上的数据。
 
 ### 拉 debug 日志（给 Cursor 读）
 
 ```bash
-BRIDGE_URL=http://127.0.0.1:3000 python3 tools/pull_logs.py
+python3 tools/pull_logs.py
 ```
 
-日志写入 `logs/qmt-debug.log`。Azure 就绪后改 `BRIDGE_URL`。
+默认拉线上 `https://ptrade.console.enrichlife.today`，写入 `logs/qmt-debug.log`。
 
 ### QMT 侧
 
-1. 编辑 `strategies/qmt_bridge.py`：填 `ACCOUNT`、`BASE_URL`（Azure 站点根 URL）
+1. 编辑 `strategies/qmt_bridge.py`：填 `ACCOUNT`（`BASE_URL` 已是线上地址）
 2. 全文贴进 QMT，**交易里实盘启动**，周期 3–5 秒
 3. 不要回测，不要点下单
+4. 打开 https://ptrade.console.enrichlife.today/ 应出现委托/成交；`updatedAt` 会开始更新
 
 ## 已确认能用
 
@@ -61,8 +73,9 @@ BRIDGE_URL=http://127.0.0.1:3000 python3 tools/pull_logs.py
 - `strategies/tick_push_once.py`：tick 快照 POST httpcan（已验证）
 - `strategies/account_orders_deals.py`：实盘打印挂盘/成交明细（已验证）
 - `strategies/qmt_bridge.py`：持续推 sync + debug 到 Web
-- `server/`：Express API + UI
-- `tools/pull_logs.py`：每秒拉 `/api/debug` 到本地
+- `server/`：Express；写入/读取 MySQL
+- `server/schema.sql`：两张表
+- `tools/pull_logs.py`：每秒拉 `/api/debug` 到本地（可选，库通了之后可直接查 `debug_log`）
 
 ## API
 

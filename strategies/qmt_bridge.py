@@ -7,9 +7,9 @@ QMT -> Web 桥接（只读）。实盘启动，不要回测。
 不下单、不撤单。
 """
 
-ACCOUNT = ''
+ACCOUNT = '220500068710'
 STOCK_UNIVERSE = '159781.SZ'
-BASE_URL = 'https://你的azure站点.azurewebsites.net'
+BASE_URL = 'https://ptrade.console.enrichlife.today'
 TOKEN = ''  # 若服务器设了 BRIDGE_TOKEN，这里填同一个
 HEARTBEAT_SEC = 5
 
@@ -88,15 +88,20 @@ def _g(row, *keys):
 
 
 def _side_text(row):
-    raw = _g(row, 'm_nDirection', 'm_nOffsetFlag')
+    name = str(_g(row, 'm_strOptName'))
+    if '卖' in name:
+        return '卖'
+    if '买' in name:
+        return '买'
+    raw = _g(row, 'm_nOffsetFlag', 'm_nDirection')
     try:
         code = int(raw)
     except Exception:
         return str(raw)
-    if code in (48, 0):
-        return '买'
     if code in (49, 1):
         return '卖'
+    if code in (48, 0):
+        return '买'
     return str(code)
 
 
@@ -222,7 +227,7 @@ def handlebar(ContextInfo):
     if now - getattr(ContextInfo, 'last_push', 0) < HEARTBEAT_SEC:
         return
 
-    if '你的azure' in BASE_URL or not ACCOUNT:
+    if not BASE_URL or '你的azure' in BASE_URL or not ACCOUNT:
         _debug(ContextInfo, '请填写 BASE_URL 和 ACCOUNT', 'error')
         _flush_debug(ContextInfo)
         ContextInfo.last_push = now

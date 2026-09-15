@@ -16,7 +16,7 @@ LOG_DIR = ROOT / "logs"
 LOG_FILE = LOG_DIR / "qmt-debug.log"
 STATE_FILE = LOG_DIR / "pull-state.json"
 
-BASE_URL = os.environ.get("BRIDGE_URL", "http://127.0.0.1:3000").rstrip("/")
+BASE_URL = os.environ.get("BRIDGE_URL", "https://ptrade.console.enrichlife.today").rstrip("/")
 TOKEN = os.environ.get("BRIDGE_TOKEN", "")
 
 

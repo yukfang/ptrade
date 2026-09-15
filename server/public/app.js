@@ -1,5 +1,7 @@
 const PREFERRED = [
+  "m_strInstrumentName",
   "code",
+  "m_strOptName",
   "side",
   "price",
   "qty",
@@ -8,13 +10,7 @@ const PREFERRED = [
   "date",
   "trade_id",
   "order_id",
-  "m_strInstrumentID",
-  "m_strStockCode",
-  "m_dPrice",
-  "m_nVolume",
-  "m_nOrderStatus",
-  "m_strTradeTime",
-  "m_strInsertTime",
+  "m_dCommission",
 ];
 
 function keysFor(rows) {
