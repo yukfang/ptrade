@@ -1,0 +1,60 @@
+:root {
+  color: #1b1b1b;
+  background: #f4f1ea;
+  font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+}
+
+header h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+#meta {
+  margin: 0 0 24px;
+  color: #5c5c5c;
+}
+
+section {
+  background: #fff;
+  border: 1px solid #ddd6c8;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+h2 span {
+  color: #8a6d3b;
+}
+
+.table-wrap {
+  overflow: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+th,
+td {
+  border-bottom: 1px solid #eee;
+  text-align: left;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+
+th {
+  color: #666;
+  font-weight: 600;
+}

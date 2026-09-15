@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QMT 桥接</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>QMT 账户桥接</h1>
+      <p id="meta">等待 QMT 推送…</p>
+    </header>
+    <main>
+      <section>
+        <h2>挂盘 <span id="open-count">0</span></h2>
+        <div class="table-wrap"><table id="open-table"></table></div>
+      </section>
+      <section>
+        <h2>委托 <span id="order-count">0</span></h2>
+        <div class="table-wrap"><table id="order-table"></table></div>
+      </section>
+      <section>
+        <h2>成交 <span id="deal-count">0</span></h2>
+        <div class="table-wrap"><table id="deal-table"></table></div>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
