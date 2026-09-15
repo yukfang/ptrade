@@ -42,7 +42,7 @@ npm start
 
 启动时会自动建表。也可手动执行 `server/schema.sql`。
 
-Local 和 Cloud 用**同一套** `MYSQL_*`，本地 UI 才能看到 QMT 刚推到线上的数据。
+Local 和 Cloud 用**同一套** `PTRADE_DATABASE_URL`。SSL 使用 `assets/ApsaraDB-CA-Chain/ApsaraDB-CA-Chain.pem`（`?ssl=true`）。
 
 ### 拉 debug 日志（给 Cursor 读）
 

@@ -1,6 +1,10 @@
+const fs = require("fs");
+const path = require("path");
 const mysql = require("mysql2/promise");
 
 let pool;
+
+const DEFAULT_CA = path.join(__dirname, "..", "assets", "ApsaraDB-CA-Chain", "ApsaraDB-CA-Chain.pem");
 
 function stripQuotes(value) {
   const s = String(value || "").trim();
@@ -42,11 +46,23 @@ function parseMysqlUrl(raw) {
 }
 
 function sslOption(urlSsl) {
-  const flag = String(urlSsl || process.env.MYSQL_SSL || "").toLowerCase();
-  if (flag === "1" || flag === "true" || flag === "required") {
-    return { rejectUnauthorized: process.env.MYSQL_SSL_REJECT_UNAUTHORIZED !== "false" };
+  const flag = String(urlSsl || process.env.MYSQL_SSL || "true").toLowerCase();
+  if (flag === "0" || flag === "false" || flag === "disable") {
+    return undefined;
   }
-  return undefined;
+  const caPath = path.isAbsolute(process.env.MYSQL_SSL_CA || "")
+    ? process.env.MYSQL_SSL_CA
+    : process.env.MYSQL_SSL_CA
+      ? path.join(__dirname, "..", process.env.MYSQL_SSL_CA)
+      : DEFAULT_CA;
+  if (!fs.existsSync(caPath)) {
+    throw new Error("MySQL SSL CA not found: " + caPath);
+  }
+  return {
+    ca: fs.readFileSync(caPath),
+    rejectUnauthorized: process.env.MYSQL_SSL_REJECT_UNAUTHORIZED !== "false",
+    minVersion: "TLSv1.2",
+  };
 }
 
 function connectionConfig() {
