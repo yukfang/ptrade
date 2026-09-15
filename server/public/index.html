@@ -10,19 +10,27 @@
     <header>
       <h1>QMT 账户桥接</h1>
       <p id="meta">等待 QMT 推送…</p>
+      <div class="toolbar">
+        <label>价格间距
+          <input id="tick" type="number" step="0.001" min="0.001" value="0.001" />
+        </label>
+        <span class="legend">
+          <span class="chip hang buy">买挂</span>
+          <span class="chip hang sell">卖挂</span>
+          <span class="chip fill buy">成交</span>
+          <span class="chip cancel">撤单</span>
+        </span>
+      </div>
     </header>
     <main>
-      <section>
-        <h2>挂盘 <span id="open-count">0</span></h2>
-        <div class="table-wrap"><table id="open-table"></table></div>
-      </section>
-      <section>
-        <h2>委托 <span id="order-count">0</span></h2>
-        <div class="table-wrap"><table id="order-table"></table></div>
-      </section>
-      <section>
-        <h2>成交 <span id="deal-count">0</span></h2>
-        <div class="table-wrap"><table id="deal-table"></table></div>
+      <section class="ladder-section">
+        <div class="ladder-head">
+          <span>价格</span>
+          <span>挂单</span>
+          <span>成交</span>
+          <span>撤单</span>
+        </div>
+        <div id="ladder" class="ladder"></div>
       </section>
     </main>
     <script src="./app.js"></script>

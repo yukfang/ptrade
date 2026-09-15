@@ -15,46 +15,140 @@ header h1 {
 }
 
 #meta {
-  margin: 0 0 24px;
+  margin: 0 0 12px;
   color: #5c5c5c;
 }
 
-section {
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.toolbar label {
+  font-size: 13px;
+  color: #555;
+}
+
+.toolbar input {
+  width: 88px;
+  margin-left: 6px;
+  padding: 4px 6px;
+}
+
+.legend {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.chip.hang.buy,
+.tag.hang.buy {
+  background: #e8f5e9;
+  color: #1b7f3a;
+}
+
+.chip.hang.sell,
+.tag.hang.sell {
+  background: #fdecea;
+  color: #c0392b;
+}
+
+.chip.fill.buy,
+.tag.fill.buy {
+  background: #d4edda;
+  color: #155d27;
+}
+
+.chip.fill.sell,
+.tag.fill.sell {
+  background: #f8d7da;
+  color: #92181c;
+}
+
+.chip.cancel,
+.tag.cancel {
+  background: #eee;
+  color: #666;
+}
+
+.ladder-section {
   background: #fff;
   border: 1px solid #ddd6c8;
   border-radius: 10px;
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-h2 {
-  margin: 0 0 12px;
-  font-size: 16px;
-}
-
-h2 span {
-  color: #8a6d3b;
-}
-
-.table-wrap {
+  padding: 12px 0;
   overflow: auto;
 }
 
-table {
-  border-collapse: collapse;
-  width: 100%;
+.ladder-head,
+.ladder-row {
+  display: grid;
+  grid-template-columns: 72px minmax(140px, 1fr) minmax(140px, 1fr) minmax(140px, 1fr);
+  align-items: stretch;
+  column-gap: 0;
+  padding: 0 16px;
+  min-height: 28px;
+}
+
+.ladder-head {
+  font-size: 12px;
+  color: #888;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.ladder-head > :nth-child(1),
+.ladder-row .price {
+  text-align: center;
+}
+
+.ladder-head > :nth-child(2),
+.ladder-row .hangs,
+.ladder-head > :nth-child(3),
+.ladder-row .fills,
+.ladder-head > :nth-child(4),
+.ladder-row .cancels {
+  padding-left: 12px;
+}
+
+.ladder-row {
+  border-top: 1px solid #f0ebe3;
   font-size: 13px;
 }
 
-th,
-td {
-  border-bottom: 1px solid #eee;
-  text-align: left;
-  padding: 6px 8px;
-  white-space: nowrap;
+.ladder-row.empty {
+  color: #ccc;
 }
 
-th {
-  color: #666;
+.ladder-row .price {
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
+  line-height: 28px;
+  border-left: 1px solid #eee7db;
+  border-right: 1px solid #eee7db;
+}
+
+.cells {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.tag {
+  font-size: 12px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
 }
