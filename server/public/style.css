@@ -38,26 +38,8 @@ header h1 {
 }
 
 #meta {
-  margin: 0 0 8px;
-  color: #5c5c5c;
-}
-
-.quote {
   margin: 0 0 12px;
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
-  display: flex;
-  gap: 16px;
-}
-
-.quote-bid-label {
-  color: #1b7f3a;
-  font-weight: 600;
-}
-
-.quote-ask-label {
-  color: #c0392b;
-  font-weight: 600;
+  color: #5c5c5c;
 }
 
 .toolbar {

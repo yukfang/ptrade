@@ -3,6 +3,7 @@ const CANCEL_STATUS = new Set([53, 54, 57]);
 
 let lastMetaText = "";
 let lastSyncText = "";
+let lastLadderKey = "";
 let lastQuoteKey = "";
 let lastTick = null;
 let lastGoodData = null;
@@ -195,23 +196,6 @@ function applyQuoteClasses(root, data, tick) {
   }
 }
 
-function setQuote(data) {
-  const el = document.getElementById("quote");
-  if (!el) return;
-  const digits = tickDigits(tickValue());
-  const fmt = (p) => (num(p) > 0 ? num(p).toFixed(digits) : "--");
-  const bid = el.querySelector(".quote-bid-label");
-  const ask = el.querySelector(".quote-ask-label");
-  const bidText = `买1 ${fmt(data && data.bid1)}`;
-  const askText = `卖1 ${fmt(data && data.ask1)}`;
-  if (bid && ask) {
-    if (bid.textContent !== bidText) bid.textContent = bidText;
-    if (ask.textContent !== askText) ask.textContent = askText;
-    return;
-  }
-  el.innerHTML = `<span class="quote-bid-label">${bidText}</span><span class="quote-ask-label">${askText}</span>`;
-}
-
 function renderLadder(levels, tick, data) {
   const root = document.getElementById("ladder");
   const section = root.closest(".ladder-section");
@@ -374,7 +358,6 @@ async function refresh() {
     const orders = (data.orders || []).length;
     const deals = (data.deals || []).length;
     setLatestSync(data.updatedAt);
-    setQuote(data);
     setMeta(`${data.stock || "-"}  挂盘${open} 委托${orders} 成交${deals}`);
     renderLadder(buildLevels(data, tick), tick, data);
   } catch (err) {
