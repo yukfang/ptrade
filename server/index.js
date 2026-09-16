@@ -1,6 +1,7 @@
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+const pkg = require("../package.json");
 const express = require("express");
 const db = require("./db");
 
@@ -35,7 +36,8 @@ function asyncHandler(fn) {
 app.get(
   "/api/health",
   asyncHandler(async (_req, res) => {
-    res.json(await db.health());
+    const h = await db.health();
+    res.json({ ...h, appVersion: pkg.version });
   })
 );
 

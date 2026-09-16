@@ -84,7 +84,7 @@ python3 tools/pull_logs.py
 - `POST /api/debug` QMT 日志
 - `GET /api/debug?after=ID` 本机拉日志
 - `GET /api/commands` 占位，返回 `[]`
-- `GET /api/health`
+- `GET /api/health` 含 `appVersion`（来自 `package.json`）
 
 可选请求头：`X-Bridge-Token`（环境变量 `BRIDGE_TOKEN`）
 

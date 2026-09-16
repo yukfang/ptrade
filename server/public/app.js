@@ -347,3 +347,14 @@ refresh().catch((err) => {
 setInterval(() => {
   refresh().catch(() => {});
 }, 1000);
+
+(async function showAppVersion() {
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    const h = await res.json();
+    const el = document.getElementById("app-version");
+    if (el && h.appVersion) el.textContent = "v" + h.appVersion;
+  } catch (_err) {
+    /* ignore */
+  }
+})();
