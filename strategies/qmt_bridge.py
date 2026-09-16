@@ -1,9 +1,9 @@
 #coding:gbk
 """
-QMT -> Web 桥接（只读）。实盘启动，不要回测。
+QMT -> Web 桥接（只读）。不要回测。
 
-填好 BASE_URL、ACCOUNT 后全文贴进银河 QMT。
-周期建议 3秒/5秒，太长则网页刷新慢。
+每 POLL_SEC 秒拉一次委托/成交并 POST。
+优先用 ContextInfo.run_time；否则在 init 里阻塞轮询（点「运行」也不会只跑一次就退出）。
 不下单、不撤单。
 """
 
@@ -11,7 +11,7 @@ ACCOUNT = '220500068710'
 STOCK_UNIVERSE = '159781.SZ'
 BASE_URL = 'https://ptrade.console.enrichlife.today'
 TOKEN = ''  # 若服务器设了 BRIDGE_TOKEN，这里填同一个
-HEARTBEAT_SEC = 5
+POLL_SEC = 5
 
 OPEN_STATUS = set([48, 49, 50, 51, 52, 55])
 ACC_TYPES = ('stock', 'STOCK', 'credit', 'CREDIT')
@@ -207,10 +207,42 @@ def _flush_debug(ContextInfo):
     ContextInfo.dbg_lines = []
 
 
+def bridge_poll(ContextInfo):
+    """给 ContextInfo.run_time 用的全局回调名。"""
+    try:
+        _sync_once(ContextInfo)
+    except Exception as e:
+        print('bridge_poll error:', type(e).__name__, e)
+
+
+def _try_start_run_time(ContextInfo):
+    if not hasattr(ContextInfo, 'run_time'):
+        return False
+    period = '%dnSecond' % int(POLL_SEC)
+    try:
+        ContextInfo.run_time('bridge_poll', period, '2020-01-01 09:30:00')
+        _debug(ContextInfo, 'run_time ok period=%s' % period)
+        return True
+    except Exception as e:
+        _debug(ContextInfo, 'run_time failed: %s %s' % (type(e).__name__, e), 'error')
+        return False
+
+
+def _poll_loop(ContextInfo):
+    import time
+    while not getattr(ContextInfo, 'stop_poll', False):
+        try:
+            _sync_once(ContextInfo)
+        except Exception as e:
+            print('poll error:', type(e).__name__, e)
+        time.sleep(POLL_SEC)
+
+
 def init(ContextInfo):
     ContextInfo.last_push = 0
     ContextInfo.last_hash = ''
     ContextInfo.dbg_lines = []
+    ContextInfo.stop_poll = False
     ContextInfo.set_universe([STOCK_UNIVERSE])
     if ACCOUNT and hasattr(ContextInfo, 'set_account'):
         try:
@@ -218,14 +250,26 @@ def init(ContextInfo):
             _debug(ContextInfo, 'set_account ok')
         except Exception as e:
             _debug(ContextInfo, 'set_account error: %s' % e, 'error')
-    _debug(ContextInfo, 'bridge init %s -> %s' % (STOCK_UNIVERSE, BASE_URL))
+    _debug(ContextInfo, 'bridge init %s -> %s poll=%ss' % (STOCK_UNIVERSE, BASE_URL, POLL_SEC))
+
+    if _try_start_run_time(ContextInfo):
+        _sync_once(ContextInfo)
+        _flush_debug(ContextInfo)
+        return
+
+    # 点「运行」时进程常会在 init/handlebar 结束后退出，守护线程也会死掉。
+    # 这里直接阻塞轮询，保持进程存活。停止策略时再点停止。
+    _debug(ContextInfo, 'fallback blocking poll loop')
     _flush_debug(ContextInfo)
+    _poll_loop(ContextInfo)
 
 
 def handlebar(ContextInfo):
+    return
+
+
+def _sync_once(ContextInfo):
     now = _now()
-    if now - getattr(ContextInfo, 'last_push', 0) < HEARTBEAT_SEC:
-        return
 
     if not BASE_URL or '你的azure' in BASE_URL or not ACCOUNT:
         _debug(ContextInfo, '请填写 BASE_URL 和 ACCOUNT', 'error')
