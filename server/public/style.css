@@ -50,17 +50,6 @@ header h1 {
   flex-wrap: wrap;
 }
 
-.toolbar label {
-  font-size: 13px;
-  color: #555;
-}
-
-.toolbar input {
-  width: 88px;
-  margin-left: 6px;
-  padding: 4px 6px;
-}
-
 .legend {
   display: flex;
   gap: 8px;

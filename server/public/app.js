@@ -1,11 +1,11 @@
 const OPEN_STATUS = new Set([48, 49, 50, 51, 52, 55]);
 const CANCEL_STATUS = new Set([53, 54, 57]);
+const TICK = 0.001;
 
 let lastMetaText = "";
 let lastSyncText = "";
 let lastLadderKey = "";
 let lastQuoteKey = "";
-let lastTick = null;
 let lastGoodData = null;
 let knownVersion = 0;
 let emptyStreak = 0;
@@ -60,13 +60,34 @@ function fmtQty(qty) {
   return String(Math.round(qty));
 }
 
+function itemsKey(items) {
+  return (items || []).map((it) => `${it.side}:${it.id}:${it.qty}`).join(",");
+}
+
 function buildLevels(data, tick) {
   const hangs = { buy: new Map(), sell: new Map() };
   const fills = { buy: new Map(), sell: new Map() };
   const cancels = { buy: new Map(), sell: new Map() };
   const idxs = [];
 
-  function add(map, price, qty) {
+  function pushItem(map, price, item, mergeById) {
+    if (!item.qty) return;
+    const idx = priceToIdx(price, tick);
+    idxs.push(idx);
+    const list = map.get(idx) || [];
+    if (mergeById && item.id) {
+      const existing = list.find((x) => x.id === item.id && x.side === item.side);
+      if (existing) {
+        existing.qty += item.qty;
+        map.set(idx, list);
+        return;
+      }
+    }
+    list.push(item);
+    map.set(idx, list);
+  }
+
+  function addCancel(map, price, qty) {
     if (!qty) return;
     const idx = priceToIdx(price, tick);
     idxs.push(idx);
@@ -81,17 +102,24 @@ function buildLevels(data, tick) {
     const traded = num(row.m_nVolumeTraded);
     const remaining = num(row.m_nVolumeTotal);
     const cancelAmt = num(row.m_dCancelAmount);
+    const orderId = String(row.order_id || row.m_strOrderSysID || row.m_strOrderRef || "");
     if (OPEN_STATUS.has(status) && remaining) {
-      add(hangs[side], orderPrice(row), remaining);
+      pushItem(hangs[side], orderPrice(row), { qty: remaining, id: orderId, side }, false);
     }
     if (CANCEL_STATUS.has(status) || cancelAmt) {
-      add(cancels[side], orderPrice(row), cancelAmt || Math.max(0, original - traded));
+      addCancel(cancels[side], orderPrice(row), cancelAmt || Math.max(0, original - traded));
     }
   }
 
   for (const row of data.deals || []) {
     const side = optSide(row) || "buy";
-    add(fills[side], dealPrice(row), num(row.m_nVolume || row.qty));
+    const orderId = String(row.order_id || row.m_strOrderSysID || row.m_strOrderRef || "");
+    pushItem(
+      fills[side],
+      dealPrice(row),
+      { qty: num(row.m_nVolume || row.qty), id: orderId, side },
+      true
+    );
   }
 
   if (num(data.bid1) > 0) idxs.push(priceToIdx(data.bid1, tick));
@@ -106,10 +134,10 @@ function buildLevels(data, tick) {
     levels.push({
       idx,
       priceLabel: fmtPriceIdx(idx, tick),
-      hangBuy: hangs.buy.get(idx) || 0,
-      hangSell: hangs.sell.get(idx) || 0,
-      fillBuy: fills.buy.get(idx) || 0,
-      fillSell: fills.sell.get(idx) || 0,
+      hangBuy: hangs.buy.get(idx) || [],
+      hangSell: hangs.sell.get(idx) || [],
+      fillBuy: fills.buy.get(idx) || [],
+      fillSell: fills.sell.get(idx) || [],
       cancelBuy: cancels.buy.get(idx) || 0,
       cancelSell: cancels.sell.get(idx) || 0,
     });
@@ -117,13 +145,24 @@ function buildLevels(data, tick) {
   return levels;
 }
 
+function rowEmpty(row) {
+  return (
+    !row.hangBuy.length &&
+    !row.hangSell.length &&
+    !row.fillBuy.length &&
+    !row.fillSell.length &&
+    !row.cancelBuy &&
+    !row.cancelSell
+  );
+}
+
 function rowKey(row) {
   return [
     row.idx,
-    row.hangBuy,
-    row.hangSell,
-    row.fillBuy,
-    row.fillSell,
+    itemsKey(row.hangBuy),
+    itemsKey(row.hangSell),
+    itemsKey(row.fillBuy),
+    itemsKey(row.fillSell),
     row.cancelBuy,
     row.cancelSell,
   ].join("|");
@@ -139,20 +178,19 @@ function tagsHtml(row) {
   const hangs = [];
   const fills = [];
   const cancels = [];
-  if (row.hangBuy) hangs.push(`<span class="tag hang buy">买挂 ${fmtQty(row.hangBuy)}</span>`);
-  if (row.hangSell) hangs.push(`<span class="tag hang sell">卖挂 ${fmtQty(row.hangSell)}</span>`);
-  if (row.fillBuy) fills.push(`<span class="tag fill buy">买成 ${fmtQty(row.fillBuy)}</span>`);
-  if (row.fillSell) fills.push(`<span class="tag fill sell">卖成 ${fmtQty(row.fillSell)}</span>`);
+  for (const item of row.hangBuy) hangs.push(`<span class="tag hang buy">买挂 ${fmtQty(item.qty)}</span>`);
+  for (const item of row.hangSell) hangs.push(`<span class="tag hang sell">卖挂 ${fmtQty(item.qty)}</span>`);
+  for (const item of row.fillBuy) fills.push(`<span class="tag fill buy">买成 ${fmtQty(item.qty)}</span>`);
+  for (const item of row.fillSell) fills.push(`<span class="tag fill sell">卖成 ${fmtQty(item.qty)}</span>`);
   if (row.cancelBuy) cancels.push(`<span class="tag cancel">买撤 ${fmtQty(row.cancelBuy)}</span>`);
   if (row.cancelSell) cancels.push(`<span class="tag cancel">卖撤 ${fmtQty(row.cancelSell)}</span>`);
   return { hangs: hangs.join(""), fills: fills.join(""), cancels: cancels.join("") };
 }
 
 function createRowEl(row) {
-  const empty = !row.hangBuy && !row.hangSell && !row.fillBuy && !row.fillSell && !row.cancelBuy && !row.cancelSell;
   const tags = tagsHtml(row);
   const el = document.createElement("div");
-  el.className = `ladder-row${empty ? " empty" : ""}`;
+  el.className = `ladder-row${rowEmpty(row) ? " empty" : ""}`;
   el.dataset.idx = String(row.idx);
   el.dataset.key = rowKey(row);
   el.innerHTML = `
@@ -166,9 +204,8 @@ function createRowEl(row) {
 function patchRowEl(el, row) {
   const key = rowKey(row);
   if (el.dataset.key === key) return false;
-  const empty = !row.hangBuy && !row.hangSell && !row.fillBuy && !row.fillSell && !row.cancelBuy && !row.cancelSell;
   const tags = tagsHtml(row);
-  el.className = `ladder-row${empty ? " empty" : ""}`;
+  el.className = `ladder-row${rowEmpty(row) ? " empty" : ""}`;
   el.dataset.key = key;
   const price = el.querySelector(".price");
   const hangs = el.querySelector(".hangs");
@@ -207,7 +244,7 @@ function renderLadder(levels, tick, data) {
     return;
   }
 
-  if (fingerprint !== lastLadderKey || tick !== lastTick) {
+  if (fingerprint !== lastLadderKey) {
     const byIdx = new Map();
     for (const el of root.querySelectorAll(".ladder-row[data-idx]")) {
       byIdx.set(el.dataset.idx, el);
@@ -246,7 +283,6 @@ function renderLadder(levels, tick, data) {
 
     if (section) section.scrollTop = scrollTop;
     lastLadderKey = fingerprint;
-    lastTick = tick;
   }
 
   applyQuoteClasses(root, data, tick);
@@ -301,8 +337,7 @@ function rememberVersion(version) {
 }
 
 function tickValue() {
-  const n = Number(document.getElementById("tick").value);
-  return n > 0 ? n : 0.001;
+  return TICK;
 }
 
 function isUsableState(data) {
@@ -326,6 +361,7 @@ async function refresh() {
     if (data.unchanged) {
       emptyStreak = 0;
       rememberVersion(data.version);
+      if (data.updatedAt != null) setLatestSync(data.updatedAt);
       return;
     }
 
@@ -371,16 +407,6 @@ async function refresh() {
     refreshing = false;
   }
 }
-
-document.getElementById("tick").addEventListener("change", () => {
-  lastLadderKey = "";
-  if (lastGoodData) {
-    renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
-    return;
-  }
-  knownVersion = 0;
-  refresh().catch(() => {});
-});
 
 refresh().catch((err) => {
   setMeta(`拉取失败: ${err.message}`);

@@ -192,7 +192,7 @@ async function saveSnapshot(payload) {
      ON DUPLICATE KEY UPDATE
        payload = IF(content_hash = VALUES(content_hash), payload, VALUES(payload)),
        version = VALUES(version),
-       updated_at = IF(content_hash = VALUES(content_hash), updated_at, VALUES(updated_at)),
+       updated_at = CURRENT_TIMESTAMP(3),
        content_hash = VALUES(content_hash)`,
     [account, stock, json, hash, nextVersion]
   );
@@ -260,7 +260,11 @@ async function getSnapshot(since = 0) {
   const row = rows[0];
   const version = Number(row.version) || 0;
   if (since > 0 && version > 0 && since >= version) {
-    return { unchanged: true, version };
+    return {
+      unchanged: true,
+      version,
+      updatedAt: toEpochMs(row.updated_at_unix, row.updated_at),
+    };
   }
   const payload = parsePayload(row.payload) || {};
   const updatedAt = toEpochMs(row.updated_at_unix, row.updated_at);
