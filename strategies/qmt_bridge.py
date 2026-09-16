@@ -189,6 +189,72 @@ def _order_view(row):
     return d
 
 
+def _px(value):
+    try:
+        n = float(value)
+    except Exception:
+        return None
+    if n != n or n <= 0:
+        return None
+    return round(n, 6)
+
+
+def _first_px(seq):
+    if seq is None:
+        return None
+    if isinstance(seq, (list, tuple)):
+        for item in seq:
+            px = _px(item)
+            if px is not None:
+                return px
+        return None
+    return _px(seq)
+
+
+def _tick_dict(data):
+    if not isinstance(data, dict) or not data:
+        return {}
+    direct = data.get(STOCK_UNIVERSE)
+    if isinstance(direct, dict):
+        return direct
+    short = STOCK_UNIVERSE.replace('.SZ', '').replace('.SH', '')
+    for key, val in data.items():
+        if isinstance(val, dict) and short in str(key):
+            return val
+    if len(data) == 1:
+        only = list(data.values())[0]
+        if isinstance(only, dict):
+            return only
+    if 'bidPrice' in data or 'askPrice' in data or 'lastPrice' in data:
+        return data
+    return {}
+
+
+def _read_quote(ContextInfo):
+    try:
+        raw = ContextInfo.get_full_tick([STOCK_UNIVERSE])
+    except Exception as e:
+        return {}, 'get_full_tick %s %s' % (type(e).__name__, e)
+    tick = _tick_dict(raw)
+    bid1 = _first_px(tick.get('bidPrice')) or _px(tick.get('bid1'))
+    ask1 = _first_px(tick.get('askPrice')) or _px(tick.get('ask1'))
+    last = _px(tick.get('lastPrice')) or _px(tick.get('lastClose'))
+    bid1_qty = _first_px(tick.get('bidVol')) or _px(tick.get('bidVol1'))
+    ask1_qty = _first_px(tick.get('askVol')) or _px(tick.get('askVol1'))
+    quote = {}
+    if bid1 is not None:
+        quote['bid1'] = bid1
+    if ask1 is not None:
+        quote['ask1'] = ask1
+    if last is not None:
+        quote['lastPrice'] = last
+    if bid1_qty is not None:
+        quote['bid1Qty'] = bid1_qty
+    if ask1_qty is not None:
+        quote['ask1Qty'] = ask1_qty
+    return quote, None
+
+
 def _debug(ContextInfo, message, level='info'):
     print(message)
     lines = getattr(ContextInfo, 'dbg_lines', None)
@@ -291,6 +357,9 @@ def _sync_once(ContextInfo):
     open_orders = [_order_view(o) for o in stock_orders if _is_open_order(o)]
     order_views = [_order_view(o) for o in stock_orders]
     deal_views = [_deal_view(d) for d in stock_deals]
+    quote, quote_err = _read_quote(ContextInfo)
+    if quote_err:
+        _debug(ContextInfo, quote_err, 'error')
 
     payload = {
         'account': ACCOUNT,
@@ -299,8 +368,10 @@ def _sync_once(ContextInfo):
         'orders': order_views,
         'deals': deal_views,
     }
+    payload.update(quote)
     code, content = _http_json('/api/sync', payload)
-    _debug(ContextInfo, 'sync http %s orders=%s deals=%s open=%s body=%s' % (
-        code, len(order_views), len(deal_views), len(open_orders), str(content)[:180]))
+    _debug(ContextInfo, 'sync http %s orders=%s deals=%s open=%s bid1=%s ask1=%s body=%s' % (
+        code, len(order_views), len(deal_views), len(open_orders),
+        quote.get('bid1'), quote.get('ask1'), str(content)[:180]))
     ContextInfo.last_push = now
     _flush_debug(ContextInfo)

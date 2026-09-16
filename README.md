@@ -25,7 +25,7 @@ Local Console  / Cloud UI      --读--> MySQL
 | [3] | Web UI 展示挂盘/委托/成交 | 已有表格；改读 MySQL |
 | [4] | debug 写入 `debug_log` 表 | 进行中 |
 
-QMT 不直连数据库。策略不用改。
+QMT 不直连数据库。买1/卖1 需要把更新后的 `qmt_bridge.py` 重新贴进 QMT 再运行。
 
 ### MySQL（第一版两张表）
 
@@ -64,7 +64,7 @@ python3 tools/pull_logs.py
 | 事项 | 结论 |
 |---|---|
 | 代码写法 | 深市 ETF：`159781.SZ` |
-| 最新快照 | `ContextInfo.get_full_tick`，Level-1 快照不是逐笔 |
+| 最新快照 | `ContextInfo.get_full_tick`，Level-1；`bidPrice[0]`/`askPrice[0]` 为买1/卖1 |
 | 外网 POST | VM 能访问公网 HTTP 并读 response |
 | 账户委托/成交 | 必须实盘。`get_trade_detail_data(account, 'stock', 'order'\|'deal')` |
 
@@ -80,7 +80,7 @@ python3 tools/pull_logs.py
 ## API
 
 - `POST /api/sync` 挂盘/委托/成交
-- `GET /api/state?since=VERSION` UI 用。无更新返回 `{unchanged:true, version}`
+- `GET /api/state?since=VERSION` UI 用。无更新返回 `{unchanged:true, version}`；`updatedAt` 为 epoch 毫秒，前端按本机时区显示
 - `POST /api/debug` QMT 日志
 - `GET /api/debug?after=ID` 本机拉日志
 - `GET /api/commands` 占位，返回 `[]`

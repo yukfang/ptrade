@@ -47,10 +47,9 @@ app.post(
   asyncHandler(async (req, res) => {
     const body = req.body || {};
     const saved = await db.saveSnapshot(body);
-    const iso = saved.updatedAt instanceof Date ? saved.updatedAt.toISOString() : saved.updatedAt;
     res.json({
       ok: true,
-      updatedAt: iso,
+      updatedAt: saved.updatedAt,
       version: saved.version,
       unchanged: saved.unchanged,
       counts: {

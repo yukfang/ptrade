@@ -197,14 +197,30 @@ async function saveSnapshot(payload) {
     [account, stock, json, hash, nextVersion]
   );
   const [rows] = await db.query(
-    `SELECT updated_at, version FROM sync_snapshot WHERE account = ? AND stock = ?`,
+    `SELECT updated_at, UNIX_TIMESTAMP(updated_at) AS updated_at_unix, version
+     FROM sync_snapshot WHERE account = ? AND stock = ?`,
     [account, stock]
   );
   return {
-    updatedAt: rows[0] ? rows[0].updated_at : new Date(),
+    updatedAt: rows[0] ? toEpochMs(rows[0].updated_at_unix, rows[0].updated_at) : Date.now(),
     version: rows[0] ? Number(rows[0].version) || nextVersion : nextVersion,
     unchanged: Boolean(same),
   };
+}
+
+function toEpochMs(unixSeconds, fallback) {
+  const n = Number(unixSeconds);
+  if (Number.isFinite(n) && n > 0) {
+    return Math.round(n * 1000);
+  }
+  if (fallback instanceof Date) {
+    const t = fallback.getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  if (fallback == null) return null;
+  const d = fallback instanceof Date ? fallback : new Date(fallback);
+  const t = d.getTime();
+  return Number.isNaN(t) ? null : t;
 }
 
 function parsePayload(value) {
@@ -233,7 +249,7 @@ function emptySnapshot() {
 async function getSnapshot(since = 0) {
   const db = getPool();
   const [rows] = await db.query(
-    `SELECT account, stock, payload, updated_at, version
+    `SELECT account, stock, payload, updated_at, UNIX_TIMESTAMP(updated_at) AS updated_at_unix, version
      FROM sync_snapshot
      ORDER BY version DESC, updated_at DESC
      LIMIT 1`
@@ -247,7 +263,7 @@ async function getSnapshot(since = 0) {
     return { unchanged: true, version };
   }
   const payload = parsePayload(row.payload) || {};
-  const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at;
+  const updatedAt = toEpochMs(row.updated_at_unix, row.updated_at);
   return {
     unchanged: false,
     version,

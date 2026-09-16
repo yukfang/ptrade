@@ -3,7 +3,7 @@ const CANCEL_STATUS = new Set([53, 54, 57]);
 
 let lastMetaText = "";
 let lastSyncText = "";
-let lastLadderKey = "";
+let lastQuoteKey = "";
 let lastTick = null;
 let lastGoodData = null;
 let knownVersion = 0;
@@ -93,6 +93,9 @@ function buildLevels(data, tick) {
     add(fills[side], dealPrice(row), num(row.m_nVolume || row.qty));
   }
 
+  if (num(data.bid1) > 0) idxs.push(priceToIdx(data.bid1, tick));
+  if (num(data.ask1) > 0) idxs.push(priceToIdx(data.ask1, tick));
+
   if (!idxs.length) return [];
 
   const min = Math.min(...idxs);
@@ -125,8 +128,10 @@ function rowKey(row) {
   ].join("|");
 }
 
-function ladderFingerprint(levels, tick) {
-  return `${tick}::` + levels.map(rowKey).join(";");
+function ladderFingerprint(levels, tick, data) {
+  const bid = num(data && data.bid1);
+  const ask = num(data && data.ask1);
+  return `${tick}::${bid}::${ask}::` + levels.map(rowKey).join(";");
 }
 
 function tagsHtml(row) {
@@ -175,67 +180,119 @@ function patchRowEl(el, row) {
   return true;
 }
 
-function renderLadder(levels, tick) {
+function applyQuoteClasses(root, data, tick) {
+  const bidIdx = num(data && data.bid1) > 0 ? String(priceToIdx(data.bid1, tick)) : "";
+  const askIdx = num(data && data.ask1) > 0 ? String(priceToIdx(data.ask1, tick)) : "";
+  for (const el of root.querySelectorAll(".ladder-row[data-idx]")) {
+    el.classList.toggle("quote-bid", el.dataset.idx === bidIdx);
+    el.classList.toggle("quote-ask", el.dataset.idx === askIdx);
+  }
+  const key = `${bidIdx}|${askIdx}`;
+  if (key !== lastQuoteKey) {
+    lastQuoteKey = key;
+    const target = root.querySelector(".quote-bid, .quote-ask");
+    if (target) target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
+function setQuote(data) {
+  const el = document.getElementById("quote");
+  if (!el) return;
+  const digits = tickDigits(tickValue());
+  const fmt = (p) => (num(p) > 0 ? num(p).toFixed(digits) : "--");
+  const bid = el.querySelector(".quote-bid-label");
+  const ask = el.querySelector(".quote-ask-label");
+  const bidText = `买1 ${fmt(data && data.bid1)}`;
+  const askText = `卖1 ${fmt(data && data.ask1)}`;
+  if (bid && ask) {
+    if (bid.textContent !== bidText) bid.textContent = bidText;
+    if (ask.textContent !== askText) ask.textContent = askText;
+    return;
+  }
+  el.innerHTML = `<span class="quote-bid-label">${bidText}</span><span class="quote-ask-label">${askText}</span>`;
+}
+
+function renderLadder(levels, tick, data) {
   const root = document.getElementById("ladder");
   const section = root.closest(".ladder-section");
   const scrollTop = section ? section.scrollTop : 0;
-  const fingerprint = ladderFingerprint(levels, tick);
+  const fingerprint = ladderFingerprint(levels, tick, data);
 
   if (!levels.length) {
     // 偶发空响应不立刻清空，避免整表闪没
     return;
   }
 
-  if (fingerprint === lastLadderKey && tick === lastTick) {
-    return;
-  }
-
-  const byIdx = new Map();
-  for (const el of root.querySelectorAll(".ladder-row[data-idx]")) {
-    byIdx.set(el.dataset.idx, el);
-  }
-
-  // 去掉「暂无数据」占位
-  for (const el of root.querySelectorAll(".ladder-row.empty:not([data-idx])")) {
-    el.remove();
-  }
-
-  const nextEls = [];
-  for (const row of levels) {
-    const id = String(row.idx);
-    let el = byIdx.get(id);
-    if (el) {
-      patchRowEl(el, row);
-      byIdx.delete(id);
-    } else {
-      el = createRowEl(row);
+  if (fingerprint !== lastLadderKey || tick !== lastTick) {
+    const byIdx = new Map();
+    for (const el of root.querySelectorAll(".ladder-row[data-idx]")) {
+      byIdx.set(el.dataset.idx, el);
     }
-    nextEls.push(el);
-  }
 
-  // 就地重排/插入，不整表 replaceChildren
-  let cursor = root.firstChild;
-  for (const el of nextEls) {
-    if (cursor === el) {
-      cursor = cursor.nextSibling;
-      continue;
+    // 去掉「暂无数据」占位
+    for (const el of root.querySelectorAll(".ladder-row.empty:not([data-idx])")) {
+      el.remove();
     }
-    root.insertBefore(el, cursor);
-  }
-  for (const el of byIdx.values()) {
-    el.remove();
+
+    const nextEls = [];
+    for (const row of levels) {
+      const id = String(row.idx);
+      let el = byIdx.get(id);
+      if (el) {
+        patchRowEl(el, row);
+        byIdx.delete(id);
+      } else {
+        el = createRowEl(row);
+      }
+      nextEls.push(el);
+    }
+
+    // 就地重排/插入，不整表 replaceChildren
+    let cursor = root.firstChild;
+    for (const el of nextEls) {
+      if (cursor === el) {
+        cursor = cursor.nextSibling;
+        continue;
+      }
+      root.insertBefore(el, cursor);
+    }
+    for (const el of byIdx.values()) {
+      el.remove();
+    }
+
+    if (section) section.scrollTop = scrollTop;
+    lastLadderKey = fingerprint;
+    lastTick = tick;
   }
 
-  if (section) section.scrollTop = scrollTop;
-  lastLadderKey = fingerprint;
-  lastTick = tick;
+  applyQuoteClasses(root, data, tick);
+}
+
+function parseEpochMs(ts) {
+  if (ts == null || ts === "") return null;
+  if (typeof ts === "number" && Number.isFinite(ts)) {
+    return ts < 1e12 ? ts * 1000 : ts;
+  }
+  if (typeof ts === "string" && /^\d+(\.\d+)?$/.test(ts.trim())) {
+    const n = Number(ts);
+    return n < 1e12 ? n * 1000 : n;
+  }
+  const d = new Date(ts);
+  const t = d.getTime();
+  return Number.isNaN(t) ? null : t;
 }
 
 function formatTs(ts) {
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return String(ts);
+  const ms = parseEpochMs(ts);
+  if (ms == null) return String(ts);
+  const d = new Date(ms);
   const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  const zone =
+    new Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+      .formatToParts(d)
+      .find((p) => p.type === "timeZoneName") || {};
+  const suffix = zone.value ? ` ${zone.value}` : "";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${suffix}`;
 }
 
 function setLatestSync(ts) {
@@ -265,12 +322,12 @@ function tickValue() {
 }
 
 function isUsableState(data) {
-  if (!data || !data.updatedAt) return false;
+  if (!data || data.updatedAt == null || data.updatedAt === "") return false;
   const n =
     (data.openOrders || []).length +
     (data.orders || []).length +
     (data.deals || []).length;
-  return n > 0;
+  return n > 0 || num(data.bid1) > 0 || num(data.ask1) > 0;
 }
 
 async function refresh() {
@@ -317,8 +374,9 @@ async function refresh() {
     const orders = (data.orders || []).length;
     const deals = (data.deals || []).length;
     setLatestSync(data.updatedAt);
+    setQuote(data);
     setMeta(`${data.stock || "-"}  挂盘${open} 委托${orders} 成交${deals}`);
-    renderLadder(buildLevels(data, tick), tick);
+    renderLadder(buildLevels(data, tick), tick, data);
   } catch (err) {
     emptyStreak += 1;
     if (!lastGoodData) {
@@ -334,7 +392,7 @@ async function refresh() {
 document.getElementById("tick").addEventListener("change", () => {
   lastLadderKey = "";
   if (lastGoodData) {
-    renderLadder(buildLevels(lastGoodData, tickValue()), tickValue());
+    renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
     return;
   }
   knownVersion = 0;
