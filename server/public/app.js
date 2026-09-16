@@ -6,6 +6,7 @@ let lastSyncText = "";
 let lastLadderKey = "";
 let lastTick = null;
 let lastGoodData = null;
+let knownVersion = 0;
 let emptyStreak = 0;
 let refreshing = false;
 
@@ -251,6 +252,13 @@ function setMeta(text) {
   document.getElementById("meta").textContent = text;
 }
 
+function rememberVersion(version) {
+  const v = Number(version);
+  if (Number.isFinite(v) && v > 0) {
+    knownVersion = v;
+  }
+}
+
 function tickValue() {
   const n = Number(document.getElementById("tick").value);
   return n > 0 ? n : 0.001;
@@ -269,10 +277,18 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const res = await fetch("/api/state", { cache: "no-store" });
+    const res = await fetch(`/api/state?since=${knownVersion}`, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const tick = tickValue();
+
+    if (data.unchanged) {
+      emptyStreak = 0;
+      rememberVersion(data.version);
+      return;
+    }
+
+    rememberVersion(data.version);
 
     if (!isUsableState(data)) {
       emptyStreak += 1;
@@ -317,6 +333,11 @@ async function refresh() {
 
 document.getElementById("tick").addEventListener("change", () => {
   lastLadderKey = "";
+  if (lastGoodData) {
+    renderLadder(buildLevels(lastGoodData, tickValue()), tickValue());
+    return;
+  }
+  knownVersion = 0;
   refresh().catch(() => {});
 });
 

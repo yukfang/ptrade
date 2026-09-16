@@ -80,7 +80,7 @@ python3 tools/pull_logs.py
 ## API
 
 - `POST /api/sync` 挂盘/委托/成交
-- `GET /api/state` UI 用
+- `GET /api/state?since=VERSION` UI 用。无更新返回 `{unchanged:true, version}`
 - `POST /api/debug` QMT 日志
 - `GET /api/debug?after=ID` 本机拉日志
 - `GET /api/commands` 占位，返回 `[]`

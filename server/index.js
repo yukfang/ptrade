@@ -44,11 +44,13 @@ app.post(
   checkToken,
   asyncHandler(async (req, res) => {
     const body = req.body || {};
-    const updatedAt = await db.saveSnapshot(body);
-    const iso = updatedAt instanceof Date ? updatedAt.toISOString() : updatedAt;
+    const saved = await db.saveSnapshot(body);
+    const iso = saved.updatedAt instanceof Date ? saved.updatedAt.toISOString() : saved.updatedAt;
     res.json({
       ok: true,
       updatedAt: iso,
+      version: saved.version,
+      unchanged: saved.unchanged,
       counts: {
         openOrders: (body.openOrders || []).length,
         orders: (body.orders || []).length,
@@ -61,8 +63,8 @@ app.post(
 app.get(
   "/api/state",
   checkToken,
-  asyncHandler(async (_req, res) => {
-    res.json(await db.getSnapshot());
+  asyncHandler(async (req, res) => {
+    res.json(await db.getSnapshot(Number(req.query.since || 0)));
   })
 );
 

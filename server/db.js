@@ -118,10 +118,15 @@ async function ensureSchema() {
       account VARCHAR(64) NOT NULL DEFAULT '',
       stock VARCHAR(32) NOT NULL DEFAULT '',
       payload JSON NOT NULL,
+      content_hash VARCHAR(40) NOT NULL DEFAULT '',
+      version BIGINT NOT NULL DEFAULT 0,
       updated_at DATETIME(3) NOT NULL,
       UNIQUE KEY uk_account_stock (account, stock)
     )
   `);
+  await ensureColumn("sync_snapshot", "content_hash", "VARCHAR(40) NOT NULL DEFAULT ''");
+  await ensureColumn("sync_snapshot", "version", "BIGINT NOT NULL DEFAULT 0");
+  await backfillSnapshotVersions();
   await db.query(`
     CREATE TABLE IF NOT EXISTS debug_log (
       id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -134,24 +139,72 @@ async function ensureSchema() {
   `);
 }
 
+async function ensureColumn(table, column, def) {
+  const db = getPool();
+  const [rows] = await db.query(`SHOW COLUMNS FROM \`${table}\` LIKE ?`, [column]);
+  if (!rows.length) {
+    await db.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${def}`);
+  }
+}
+
+function hashPayload(json) {
+  const crypto = require("crypto");
+  return crypto.createHash("sha1").update(json).digest("hex");
+}
+
+async function backfillSnapshotVersions() {
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT id, payload, version, content_hash
+     FROM sync_snapshot
+     WHERE version = 0 OR content_hash = '' OR content_hash IS NULL`
+  );
+  for (const row of rows) {
+    const json = typeof row.payload === "string" ? row.payload : JSON.stringify(row.payload);
+    const hash = row.content_hash || hashPayload(json);
+    await db.query(
+      `UPDATE sync_snapshot
+       SET version = GREATEST(COALESCE(version, 0), 1), content_hash = ?
+       WHERE id = ?`,
+      [hash, row.id]
+    );
+  }
+}
+
 async function saveSnapshot(payload) {
   const account = String(payload.account || "");
   const stock = String(payload.stock || "");
   const json = JSON.stringify(payload);
+  const hash = hashPayload(json);
   const db = getPool();
-  await db.query(
-    `INSERT INTO sync_snapshot (account, stock, payload, updated_at)
-     VALUES (?, ?, CAST(? AS JSON), CURRENT_TIMESTAMP(3))
-     ON DUPLICATE KEY UPDATE
-       payload = VALUES(payload),
-       updated_at = VALUES(updated_at)`,
-    [account, stock, json]
-  );
-  const [rows] = await db.query(
-    `SELECT updated_at FROM sync_snapshot WHERE account = ? AND stock = ?`,
+  const [cur] = await db.query(
+    `SELECT version, content_hash FROM sync_snapshot WHERE account = ? AND stock = ?`,
     [account, stock]
   );
-  return rows[0] ? rows[0].updated_at : new Date();
+  const prev = cur[0];
+  const prevVersion = prev ? Number(prev.version) || 0 : 0;
+  const same = Boolean(prev && prev.content_hash && prev.content_hash === hash && prevVersion > 0);
+  const nextVersion = same ? prevVersion : Math.max(1, prevVersion + 1);
+
+  await db.query(
+    `INSERT INTO sync_snapshot (account, stock, payload, content_hash, version, updated_at)
+     VALUES (?, ?, CAST(? AS JSON), ?, ?, CURRENT_TIMESTAMP(3))
+     ON DUPLICATE KEY UPDATE
+       payload = IF(content_hash = VALUES(content_hash), payload, VALUES(payload)),
+       version = VALUES(version),
+       updated_at = IF(content_hash = VALUES(content_hash), updated_at, VALUES(updated_at)),
+       content_hash = VALUES(content_hash)`,
+    [account, stock, json, hash, nextVersion]
+  );
+  const [rows] = await db.query(
+    `SELECT updated_at, version FROM sync_snapshot WHERE account = ? AND stock = ?`,
+    [account, stock]
+  );
+  return {
+    updatedAt: rows[0] ? rows[0].updated_at : new Date(),
+    version: rows[0] ? Number(rows[0].version) || nextVersion : nextVersion,
+    unchanged: Boolean(same),
+  };
 }
 
 function parsePayload(value) {
@@ -164,28 +217,40 @@ function parsePayload(value) {
   return JSON.parse(value);
 }
 
-async function getSnapshot() {
+function emptySnapshot() {
+  return {
+    unchanged: false,
+    version: 0,
+    updatedAt: null,
+    account: "",
+    stock: "",
+    openOrders: [],
+    orders: [],
+    deals: [],
+  };
+}
+
+async function getSnapshot(since = 0) {
   const db = getPool();
   const [rows] = await db.query(
-    `SELECT account, stock, payload, updated_at
+    `SELECT account, stock, payload, updated_at, version
      FROM sync_snapshot
-     ORDER BY updated_at DESC
+     ORDER BY version DESC, updated_at DESC
      LIMIT 1`
   );
   if (!rows.length) {
-    return {
-      updatedAt: null,
-      account: "",
-      stock: "",
-      openOrders: [],
-      orders: [],
-      deals: [],
-    };
+    return emptySnapshot();
   }
   const row = rows[0];
+  const version = Number(row.version) || 0;
+  if (since > 0 && version > 0 && since >= version) {
+    return { unchanged: true, version };
+  }
   const payload = parsePayload(row.payload) || {};
   const updatedAt = row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at;
   return {
+    unchanged: false,
+    version,
     ...payload,
     updatedAt,
     account: payload.account || row.account,
@@ -236,7 +301,7 @@ async function health() {
   await db.query("SELECT 1");
   const snapshot = await getSnapshot();
   const lastId = await maxDebugId();
-  return { ok: true, db: true, updatedAt: snapshot.updatedAt, logCount: lastId };
+  return { ok: true, db: true, updatedAt: snapshot.updatedAt, version: snapshot.version || 0, logCount: lastId };
 }
 
 module.exports = {

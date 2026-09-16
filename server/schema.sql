@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS sync_snapshot (
   account VARCHAR(64) NOT NULL DEFAULT '',
   stock VARCHAR(32) NOT NULL DEFAULT '',
   payload JSON NOT NULL,
+  content_hash VARCHAR(40) NOT NULL DEFAULT '',
+  version BIGINT NOT NULL DEFAULT 0,
   updated_at DATETIME(3) NOT NULL,
   UNIQUE KEY uk_account_stock (account, stock)
 );
