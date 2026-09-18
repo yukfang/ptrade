@@ -84,6 +84,7 @@ python3 tools/pull_logs.py
 - `POST /api/sync` 挂盘/委托/成交
 - `GET /api/state?since=VERSION` UI 用。无内容更新返回 `{unchanged:true, version, updatedAt, pendingHangs}`；`updatedAt` 为 epoch 毫秒（每次 QMT sync 都会刷新），前端按本机时区显示。`pendingHangs` 为尚未完成的 UI 挂单请求
 - `POST /api/hang` UI 发起买挂/卖挂（校验：买挂 < 买1，卖挂 > 卖1）
+- `POST /api/cancel` UI 对券商挂单发起撤单请求（`action=cancel`，写入同一张 `pending_orders`）
 - `GET /api/commands` QMT 拉 `pending` 队列
 - `POST /api/commands/:id/claim` 认领
 - `POST /api/commands/:id/result` 回报成功/失败

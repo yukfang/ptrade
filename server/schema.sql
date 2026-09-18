@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS pending_orders (
   source VARCHAR(32) NOT NULL DEFAULT 'ui',
   error_message VARCHAR(512) NULL,
   broker_order_id VARCHAR(64) NULL,
+  action VARCHAR(16) NOT NULL DEFAULT 'hang',
+  target_order_id VARCHAR(64) NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   claimed_at DATETIME(3) NULL,
   finished_at DATETIME(3) NULL,

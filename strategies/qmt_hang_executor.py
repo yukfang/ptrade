@@ -8,7 +8,8 @@
 流程：
   GET  /api/commands
   POST /api/commands/{id}/claim
-  passorder 限价买/卖
+  action=hang -> passorder 限价买/卖
+  action=cancel 或有 targetOrderId -> cancel 撤单（绝不再下单）
   POST /api/commands/{id}/result
 """
 
@@ -90,17 +91,21 @@ def _flush_debug(ContextInfo):
     ContextInfo.dbg_lines = []
 
 
-def _resolve_passorder(ContextInfo):
+def _resolve_fn(ContextInfo, names):
     try:
         import builtins as bi
     except ImportError:
         import __builtin__ as bi
-    for n in ('passorder', 'order_shares'):
+    for n in names:
         for obj in (bi, globals(), ContextInfo):
             fn = obj.get(n) if isinstance(obj, dict) else getattr(obj, n, None)
             if callable(fn):
                 return n, fn
     return None, None
+
+
+def _resolve_passorder(ContextInfo):
+    return _resolve_fn(ContextInfo, ('passorder', 'order_shares'))
 
 
 def _place_limit(ContextInfo, side, stock, price, qty, account):
@@ -131,6 +136,65 @@ def _place_limit(ContextInfo, side, stock, price, qty, account):
         return True, str(ret)
     except Exception as e:
         return False, '%s %s' % (type(e).__name__, e)
+
+
+def _cancel_order(ContextInfo, order_id, stock, account):
+    """
+    迅投/银河撤单。只调用撤单接口，绝不走 passorder 下单。
+    常见：cancel(orderId, accountid, 'STOCK', ContextInfo)
+    """
+    oid = str(order_id or '').strip()
+    if not oid:
+        return False, 'empty targetOrderId'
+
+    name, fn = _resolve_fn(ContextInfo, ('cancel', 'cancel_order', 'cancelorder'))
+    if not fn:
+        return False, 'cancel not found'
+
+    # 按从最常见到次常见尝试；任一成功即停。失败不改走下单。
+    tries = [
+        (oid, account, 'STOCK', ContextInfo),
+        (oid, account, 'stock', ContextInfo),
+        (oid, account, ContextInfo),
+        (account, oid, ContextInfo),
+        (oid, ContextInfo),
+    ]
+    last = 'cancel failed'
+    for args in tries:
+        try:
+            ret = fn(*args)
+            return True, str(ret)
+        except TypeError as e:
+            last = 'TypeError %s' % e
+            continue
+        except Exception as e:
+            last = '%s %s' % (type(e).__name__, e)
+            # 参数个数不对继续试；其它错误也继续试下一签名
+            continue
+    return False, last
+
+
+def _is_cancel_cmd(cmd, claimed):
+    """有 targetOrderId、action=cancel，或 stock 含 |C| 标记，一律视为撤单。"""
+    srcs = (claimed or {}, cmd or {})
+    action = ''
+    target = ''
+    stock = ''
+    for src in srcs:
+        if not action:
+            action = str(src.get('action') or '').strip().lower()
+        if not target:
+            target = str(src.get('targetOrderId') or src.get('target_order_id') or '').strip()
+        if not stock:
+            stock = str(src.get('stock') or '').strip()
+    if '|C|' in stock:
+        parts = stock.split('|C|')
+        stock_code = (parts[0] or '').strip()
+        oid = (parts[1] if len(parts) > 1 else '').strip()
+        return True, oid or target, stock_code
+    if action == 'cancel' or target:
+        return True, target, stock
+    return False, '', stock
 
 
 def _fetch_commands():
@@ -205,13 +269,24 @@ def _run_once(ContextInfo):
         if cerr or not claimed:
             _debug(ContextInfo, 'skip %s: %s' % (cid, cerr or 'empty'), 'error')
             continue
-        side = str(claimed.get('side') or '')
-        stock = str(claimed.get('stock') or STOCK_UNIVERSE)
-        price = claimed.get('price')
-        qty = claimed.get('qty')
-        account = str(claimed.get('account') or ACCOUNT)
-        _debug(ContextInfo, 'exec id=%s %s %s @%s x%s' % (cid, side, stock, price, qty))
-        ok, detail = _place_limit(ContextInfo, side, stock, price, qty, account)
+        side = str(claimed.get('side') or cmd.get('side') or '')
+        account = str(claimed.get('account') or cmd.get('account') or ACCOUNT)
+        is_cancel, target, stock_from_token = _is_cancel_cmd(cmd, claimed)
+        stock = stock_from_token or str(claimed.get('stock') or cmd.get('stock') or STOCK_UNIVERSE)
+        if '|C|' in stock:
+            stock = stock.split('|C|')[0] or STOCK_UNIVERSE
+        price = claimed.get('price') if claimed.get('price') is not None else cmd.get('price')
+        qty = claimed.get('qty') if claimed.get('qty') is not None else cmd.get('qty')
+        if is_cancel:
+            if not target:
+                _result(cid, False, error='cancel missing targetOrderId')
+                _debug(ContextInfo, 'fail id=%s cancel missing targetOrderId' % cid, 'error')
+                continue
+            _debug(ContextInfo, 'cancel id=%s order=%s %s (never place)' % (cid, target, stock))
+            ok, detail = _cancel_order(ContextInfo, target, stock, account)
+        else:
+            _debug(ContextInfo, 'hang id=%s %s %s @%s x%s' % (cid, side, stock, price, qty))
+            ok, detail = _place_limit(ContextInfo, side, stock, price, qty, account)
         if ok:
             _result(cid, True, broker_order_id=str(detail)[:64], error='')
             _debug(ContextInfo, 'done id=%s ret=%s' % (cid, str(detail)[:120]))

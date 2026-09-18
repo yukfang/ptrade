@@ -3,6 +3,9 @@ const CANCEL_STATUS = new Set([53, 54, 57]);
 const TICK = 0.001;
 const LADDER_PAD = 15;
 const QTY_KEY = "qmt_hang_qty";
+const REQUEST_FADE_MS = 3000;
+const HANG_BAR_IDLE_MS = 5000;
+const HANG_BAR_FADE_MS = 3000;
 
 let lastMetaText = "";
 let lastSyncText = "";
@@ -14,6 +17,15 @@ let emptyStreak = 0;
 let refreshing = false;
 let pendingHang = null;
 let hangSubmitting = false;
+let pendingCancel = null;
+let cancelSubmitting = false;
+let cancelBarTimer = null;
+let cancelBarFadeTimer = null;
+let hangBarTimer = null;
+let hangBarFadeTimer = null;
+let fadeCleanupTimer = null;
+let lastPendingList = [];
+const fadingHangs = new Map();
 
 function num(value) {
   const n = Number(value);
@@ -59,13 +71,70 @@ function fmtPriceIdx(idx, tick) {
   return idxToPrice(idx, tick).toFixed(tickDigits(tick));
 }
 
+function pruneFadingHangs() {
+  const now = Date.now();
+  for (const [id, ghost] of fadingHangs) {
+    if (now - ghost.started >= REQUEST_FADE_MS) fadingHangs.delete(id);
+  }
+}
+
+function scheduleFadeCleanup() {
+  if (fadeCleanupTimer) return;
+  let wait = REQUEST_FADE_MS;
+  const now = Date.now();
+  for (const ghost of fadingHangs.values()) {
+    wait = Math.min(wait, Math.max(0, REQUEST_FADE_MS - (now - ghost.started)));
+  }
+  fadeCleanupTimer = setTimeout(() => {
+    fadeCleanupTimer = null;
+    pruneFadingHangs();
+    if (lastGoodData) {
+      renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
+    }
+    if (fadingHangs.size) scheduleFadeCleanup();
+  }, wait + 40);
+}
+
+function syncFadingHangs(list) {
+  const next = Array.isArray(list) ? list : [];
+  const nextIds = new Set(next.map((x) => String(x.id)));
+  for (const old of lastPendingList) {
+    const id = String(old.id);
+    if (!nextIds.has(id) && !fadingHangs.has(id)) {
+      fadingHangs.set(id, { ...old, started: Date.now() });
+    }
+  }
+  for (const id of [...fadingHangs.keys()]) {
+    if (nextIds.has(id)) fadingHangs.delete(id);
+  }
+  lastPendingList = next;
+  pruneFadingHangs();
+  if (fadingHangs.size) scheduleFadeCleanup();
+}
+
+function pendingHangsForLadder(data) {
+  const live = data && Array.isArray(data.pendingHangs) ? data.pendingHangs : [];
+  syncFadingHangs(live);
+  const ghosts = [...fadingHangs.values()].map((g) => ({
+    id: g.id,
+    side: g.side,
+    price: g.price,
+    qty: g.qty,
+    status: g.status || "pending",
+    fading: true,
+  }));
+  return live.concat(ghosts);
+}
+
 function fmtQty(qty) {
   if (!qty) return "";
   return String(Math.round(qty));
 }
 
 function itemsKey(items) {
-  return (items || []).map((it) => `${it.side}:${it.request ? "r" : "l"}:${it.id}:${it.qty}:${it.status || ""}`).join(",");
+  return (items || [])
+    .map((it) => `${it.side}:${it.request ? "r" : "l"}:${it.id}:${it.qty}:${it.status || ""}:${it.fading ? "f" : ""}:${it.cancelPending ? "c" : ""}`)
+    .join(",");
 }
 
 function buildLevels(data, tick) {
@@ -73,6 +142,11 @@ function buildLevels(data, tick) {
   const fills = { buy: new Map(), sell: new Map() };
   const cancels = { buy: new Map(), sell: new Map() };
   const idxs = [];
+  const canceling = new Set(
+    (data.pendingCancels || [])
+      .map((x) => String(x.targetOrderId || x.target_order_id || ""))
+      .filter(Boolean)
+  );
 
   function pushItem(map, price, item, mergeById) {
     if (!item.qty) return;
@@ -108,7 +182,12 @@ function buildLevels(data, tick) {
     const cancelAmt = num(row.m_dCancelAmount);
     const orderId = String(row.order_id || row.m_strOrderSysID || row.m_strOrderRef || "");
     if (OPEN_STATUS.has(status) && remaining) {
-      pushItem(hangs[side], orderPrice(row), { qty: remaining, id: orderId, side }, false);
+      pushItem(
+        hangs[side],
+        orderPrice(row),
+        { qty: remaining, id: orderId, side, cancelPending: canceling.has(String(orderId)) },
+        false
+      );
     }
     if (CANCEL_STATUS.has(status) || cancelAmt) {
       addCancel(cancels[side], orderPrice(row), cancelAmt || Math.max(0, original - traded));
@@ -126,7 +205,7 @@ function buildLevels(data, tick) {
     );
   }
 
-  for (const row of data.pendingHangs || []) {
+  for (const row of pendingHangsForLadder(data)) {
     const side = row.side === "sell" ? "sell" : "buy";
     pushItem(
       hangs[side],
@@ -137,6 +216,7 @@ function buildLevels(data, tick) {
         side,
         request: true,
         status: row.status || "pending",
+        fading: Boolean(row.fading),
       },
       false
     );
@@ -207,9 +287,13 @@ function hangTagHtml(item) {
   const label = sell ? "卖挂" : "买挂";
   if (item.request) {
     const st = item.status === "claimed" ? "执行中" : "待执行";
-    return `<span class="tag hang ${sell ? "sell" : "buy"} request">${label} ${fmtQty(item.qty)} ${st}</span>`;
+    const fade = item.fading ? " fade-out" : "";
+    return `<span class="tag hang ${sell ? "sell" : "buy"} request${fade}">${label} ${fmtQty(item.qty)} ${st}</span>`;
   }
-  return `<span class="tag hang ${sell ? "sell" : "buy"}">${label} ${fmtQty(item.qty)}</span>`;
+  const extra = item.cancelPending ? " canceling" : " live";
+  const suffix = item.cancelPending ? " 撤单中" : "";
+  const oid = String(item.id || "").replace(/"/g, "");
+  return `<span class="tag hang ${sell ? "sell" : "buy"}${extra}" data-order-id="${oid}" data-side="${sell ? "sell" : "buy"}" data-qty="${num(item.qty)}">${label} ${fmtQty(item.qty)}${suffix}</span>`;
 }
 
 function tagsHtml(row) {
@@ -400,10 +484,34 @@ function loadHangQty() {
   });
 }
 
-function hideHangBar() {
-  pendingHang = null;
+function hideHangBar(opts) {
+  const fade = Boolean(opts && opts.fade);
+  if (hangBarTimer) {
+    clearTimeout(hangBarTimer);
+    hangBarTimer = null;
+  }
+  if (hangBarFadeTimer) {
+    clearTimeout(hangBarFadeTimer);
+    hangBarFadeTimer = null;
+  }
   const bar = document.getElementById("hang-bar");
-  if (bar) bar.classList.add("hidden");
+  if (!bar) {
+    pendingHang = null;
+    return;
+  }
+  if (!fade || bar.classList.contains("hidden")) {
+    pendingHang = null;
+    bar.classList.remove("fade-out");
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.add("fade-out");
+  hangBarFadeTimer = setTimeout(() => {
+    hangBarFadeTimer = null;
+    pendingHang = null;
+    bar.classList.remove("fade-out");
+    bar.classList.add("hidden");
+  }, HANG_BAR_FADE_MS);
 }
 
 function ensureHangBar() {
@@ -463,6 +571,7 @@ function placeHangBar(bar, clientX, clientY) {
 }
 
 function showHangBar(side, price, point) {
+  hideCancelBar();
   pendingHang = { side, price };
   const bar = ensureHangBar();
   const text = document.getElementById("hang-bar-text");
@@ -472,15 +581,182 @@ function showHangBar(side, price, point) {
   }
   const label = side === "buy" ? "买挂" : "卖挂";
   text.textContent = `${label} ${price.toFixed(3)} × ${hangQty()}`;
-  bar.classList.remove("hidden");
+  if (hangBarFadeTimer) {
+    clearTimeout(hangBarFadeTimer);
+    hangBarFadeTimer = null;
+  }
+  bar.classList.remove("hidden", "fade-out");
   bar.classList.toggle("buy", side === "buy");
   bar.classList.toggle("sell", side === "sell");
   const x = point && Number.isFinite(point.x) ? point.x : window.innerWidth / 2;
   const y = point && Number.isFinite(point.y) ? point.y : window.innerHeight / 2;
   placeHangBar(bar, x, y);
+  if (hangBarTimer) clearTimeout(hangBarTimer);
+  hangBarTimer = setTimeout(() => {
+    hangBarTimer = null;
+    hideHangBar({ fade: true });
+  }, HANG_BAR_IDLE_MS);
+}
+
+function hideCancelBar(opts) {
+  const fade = Boolean(opts && opts.fade);
+  if (cancelBarTimer) {
+    clearTimeout(cancelBarTimer);
+    cancelBarTimer = null;
+  }
+  if (cancelBarFadeTimer) {
+    clearTimeout(cancelBarFadeTimer);
+    cancelBarFadeTimer = null;
+  }
+  const bar = document.getElementById("cancel-bar");
+  if (!bar) {
+    pendingCancel = null;
+    return;
+  }
+  if (!fade || bar.classList.contains("hidden")) {
+    pendingCancel = null;
+    bar.classList.remove("fade-out");
+    bar.classList.add("hidden");
+    return;
+  }
+  bar.classList.add("fade-out");
+  cancelBarFadeTimer = setTimeout(() => {
+    cancelBarFadeTimer = null;
+    pendingCancel = null;
+    bar.classList.remove("fade-out");
+    bar.classList.add("hidden");
+  }, REQUEST_FADE_MS);
+}
+
+function ensureCancelBar() {
+  let bar = document.getElementById("cancel-bar");
+  if (bar) {
+    wireCancelBarButtons();
+    return bar;
+  }
+  bar = document.createElement("div");
+  bar.id = "cancel-bar";
+  bar.className = "hang-bar hidden";
+  bar.innerHTML = `
+    <span id="cancel-bar-text"></span>
+    <button type="button" id="cancel-confirm" class="hang-btn confirm">撤单</button>
+    <button type="button" id="cancel-dismiss" class="hang-btn cancel">取消</button>`;
+  document.body.appendChild(bar);
+  wireCancelBarButtons();
+  return bar;
+}
+
+function wireCancelBarButtons() {
+  const confirmBtn = document.getElementById("cancel-confirm");
+  const dismissBtn = document.getElementById("cancel-dismiss");
+  if (confirmBtn && !confirmBtn.dataset.wired) {
+    confirmBtn.dataset.wired = "1";
+    confirmBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      submitCancel().catch(() => {});
+    });
+  }
+  if (dismissBtn && !dismissBtn.dataset.wired) {
+    dismissBtn.dataset.wired = "1";
+    dismissBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      hideCancelBar();
+    });
+  }
+}
+
+function showCancelBar(info, point) {
+  hideHangBar();
+  pendingCancel = info;
+  const bar = ensureCancelBar();
+  const text = document.getElementById("cancel-bar-text");
+  if (!bar || !text) return;
+  const label = info.side === "sell" ? "卖挂" : "买挂";
+  text.textContent = `撤 ${label} ${Number(info.price).toFixed(3)} × ${info.qty}`;
+  if (cancelBarFadeTimer) {
+    clearTimeout(cancelBarFadeTimer);
+    cancelBarFadeTimer = null;
+  }
+  bar.classList.remove("hidden", "fade-out");
+  bar.classList.toggle("buy", info.side === "buy");
+  bar.classList.toggle("sell", info.side === "sell");
+  placeHangBar(bar, point.x, point.y);
+  if (cancelBarTimer) clearTimeout(cancelBarTimer);
+  cancelBarTimer = setTimeout(() => {
+    cancelBarTimer = null;
+    hideCancelBar({ fade: true });
+  }, 50);
+}
+
+function onHangTagClick(tag, point) {
+  if (!lastGoodData || cancelSubmitting) return;
+  if (tag.classList.contains("request")) return;
+  const orderId = String(tag.dataset.orderId || "");
+  if (!orderId) return;
+  if (tag.classList.contains("canceling")) {
+    setMeta("该挂单已有撤单请求");
+    return;
+  }
+  const row = tag.closest(".ladder-row[data-idx]");
+  const idx = Number(row && row.dataset.idx);
+  const price = Number.isFinite(idx) ? idxToPrice(idx, TICK) : 0;
+  showCancelBar(
+    {
+      orderId,
+      side: tag.dataset.side === "sell" ? "sell" : "buy",
+      qty: num(tag.dataset.qty),
+      price,
+    },
+    point
+  );
+}
+
+async function submitCancel() {
+  if (!pendingCancel || !lastGoodData || cancelSubmitting) return;
+  const info = pendingCancel;
+  cancelSubmitting = true;
+  try {
+    const res = await fetch("/api/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetOrderId: info.orderId,
+        side: info.side,
+        price: info.price,
+        qty: info.qty,
+        stock: lastGoodData.stock,
+        account: lastGoodData.account,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    setMeta(`撤单请求已写入 #${data.order.id}（待策略执行）`);
+    hideCancelBar();
+    const next = {
+      id: data.order.id,
+      targetOrderId: String(data.order.target_order_id || info.orderId),
+      side: info.side,
+      price: info.price,
+      qty: info.qty,
+      status: data.order.status || "pending",
+      action: "cancel",
+    };
+    const prev = lastGoodData.pendingCancels || [];
+    if (!prev.some((x) => String(x.targetOrderId || x.target_order_id) === String(next.targetOrderId))) {
+      lastGoodData.pendingCancels = prev.concat(next);
+    }
+    renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
+  } catch (err) {
+    setMeta(`撤单失败: ${err.message}`);
+  } finally {
+    cancelSubmitting = false;
+  }
 }
 
 function onPriceClick(el, point) {
+  hideCancelBar();
   if (!lastGoodData || hangSubmitting) return;
   const idx = Number(el.dataset.idx);
   if (!Number.isFinite(idx)) return;
@@ -570,8 +846,9 @@ async function refresh() {
       emptyStreak = 0;
       rememberVersion(data.version);
       if (data.updatedAt != null) setLatestSync(data.updatedAt);
-      if (lastGoodData && Array.isArray(data.pendingHangs)) {
-        lastGoodData.pendingHangs = data.pendingHangs;
+      if (lastGoodData && (Array.isArray(data.pendingHangs) || Array.isArray(data.pendingCancels))) {
+        if (Array.isArray(data.pendingHangs)) lastGoodData.pendingHangs = data.pendingHangs;
+        if (Array.isArray(data.pendingCancels)) lastGoodData.pendingCancels = data.pendingCancels;
         renderLadder(buildLevels(lastGoodData, tick), tick, lastGoodData);
       }
       return;
@@ -632,6 +909,12 @@ ensureHangBar();
 wireHangBarButtons();
 
 document.getElementById("ladder").addEventListener("click", (ev) => {
+  const hangTag = ev.target.closest(".tag.hang.live, .tag.hang.canceling");
+  if (hangTag) {
+    ev.stopPropagation();
+    onHangTagClick(hangTag, { x: ev.clientX, y: ev.clientY });
+    return;
+  }
   const priceEl = ev.target.closest(".price");
   if (!priceEl) return;
   const row = priceEl.closest(".ladder-row[data-idx]");

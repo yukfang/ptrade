@@ -155,6 +155,8 @@ async function ensureSchema() {
       KEY idx_status_id (status, id)
     )
   `);
+  await ensureColumn("pending_orders", "action", "VARCHAR(16) NOT NULL DEFAULT 'hang'");
+  await ensureColumn("pending_orders", "target_order_id", "VARCHAR(64) NULL");
 }
 
 async function ensureColumn(table, column, def) {
@@ -262,6 +264,7 @@ function emptySnapshot() {
     orders: [],
     deals: [],
     pendingHangs: [],
+    pendingCancels: [],
   };
 }
 
@@ -279,12 +282,14 @@ async function getSnapshot(since = 0) {
   const row = rows[0];
   const version = Number(row.version) || 0;
   const pendingHangs = await listHangRequests({ stock: row.stock || "" });
+  const pendingCancels = await listCancelRequests({ stock: row.stock || "" });
   if (since > 0 && version > 0 && since >= version) {
     return {
       unchanged: true,
       version,
       updatedAt: toEpochMs(row.updated_at_unix, row.updated_at),
       pendingHangs,
+      pendingCancels,
     };
   }
   const payload = parsePayload(row.payload) || {};
@@ -300,6 +305,7 @@ async function getSnapshot(since = 0) {
     orders: payload.orders || [],
     deals: payload.deals || [],
     pendingHangs,
+    pendingCancels,
   };
 }
 
@@ -405,8 +411,8 @@ async function createHangOrder({ account, stock, side, price, qty, source = "ui"
 
   const db = getPool();
   const [result] = await db.query(
-    `INSERT INTO pending_orders (account, stock, side, price, qty, status, source)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+    `INSERT INTO pending_orders (account, stock, side, price, qty, status, source, action)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, 'hang')`,
     [snapAccount, snapStock, s, px, q, source]
   );
   return getHangOrder(result.insertId);
@@ -418,50 +424,118 @@ async function getHangOrder(id) {
   return rows[0] || null;
 }
 
+function mapPendingRow(row) {
+  const stockRaw = String(row.stock || "");
+  let stock = stockRaw;
+  let target = row.target_order_id || "";
+  let action = row.action || "hang";
+  if (stockRaw.includes("|C|")) {
+    const parts = stockRaw.split("|C|");
+    stock = parts[0] || stock;
+    target = target || parts[1] || "";
+    action = "cancel";
+  }
+  return {
+    id: row.id,
+    account: row.account,
+    stock,
+    side: row.side,
+    price: Number(row.price),
+    qty: Number(row.qty),
+    status: row.status,
+    action,
+    targetOrderId: target,
+    createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
+  };
+}
+
 async function listHangRequests({ stock = "" } = {}) {
   const db = getPool();
   const params = [];
-  let sql = `SELECT id, account, stock, side, price, qty, status, created_at
+  let sql = `SELECT id, account, stock, side, price, qty, status, action, target_order_id, created_at
      FROM pending_orders
-     WHERE status IN ('pending', 'claimed')`;
+     WHERE status IN ('pending', 'claimed')
+       AND (action = 'hang' OR action IS NULL OR action = '')
+       AND stock NOT LIKE '%|C|%'`;
   if (stock) {
     sql += ` AND stock = ?`;
     params.push(stock);
   }
   sql += ` ORDER BY id ASC`;
   const [rows] = await db.query(sql, params);
-  return rows.map((row) => ({
-    id: row.id,
-    account: row.account,
-    stock: row.stock,
-    side: row.side,
-    price: Number(row.price),
-    qty: Number(row.qty),
-    status: row.status,
-    createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
-  }));
+  return rows.map(mapPendingRow);
+}
+
+async function listCancelRequests({ stock = "" } = {}) {
+  const db = getPool();
+  const params = [];
+  let sql = `SELECT id, account, stock, side, price, qty, status, action, target_order_id, created_at
+     FROM pending_orders
+     WHERE status IN ('pending', 'claimed')
+       AND (action = 'cancel' OR stock LIKE '%|C|%')`;
+  if (stock) {
+    sql += ` AND (stock = ? OR stock LIKE ?)`;
+    params.push(stock, `${stock}|C|%`);
+  }
+  sql += ` ORDER BY id ASC`;
+  const [rows] = await db.query(sql, params);
+  return rows.map(mapPendingRow);
 }
 
 async function listPendingCommands({ limit = 20 } = {}) {
   const db = getPool();
   const [rows] = await db.query(
-    `SELECT id, account, stock, side, price, qty, status, created_at
+    `SELECT id, account, stock, side, price, qty, status, action, target_order_id, created_at
      FROM pending_orders
      WHERE status = 'pending'
      ORDER BY id ASC
      LIMIT ?`,
     [Math.max(1, Math.min(100, Number(limit) || 20))]
   );
-  return rows.map((row) => ({
-    id: row.id,
-    account: row.account,
-    stock: row.stock,
-    side: row.side,
-    price: Number(row.price),
-    qty: Number(row.qty),
-    status: row.status,
-    createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
-  }));
+  return rows.map(mapPendingRow);
+}
+
+async function createCancelOrder({ account, stock, side, price, qty, targetOrderId, source = "ui" }) {
+  const target = String(targetOrderId || "").trim();
+  if (!target) {
+    const err = new Error("缺少委托号");
+    err.status = 400;
+    throw err;
+  }
+  const s = String(side || "").toLowerCase();
+  if (s !== "buy" && s !== "sell") {
+    const err = new Error("side must be buy or sell");
+    err.status = 400;
+    throw err;
+  }
+  const snapshot = await getSnapshot(0);
+  const snapStock = String(stock || snapshot.stock || "").trim();
+  const snapAccount = String(account || snapshot.account || "").trim();
+  if (!snapStock) {
+    const err = new Error("stock required");
+    err.status = 400;
+    throw err;
+  }
+  const db = getPool();
+  const [dup] = await db.query(
+    `SELECT id FROM pending_orders
+     WHERE action = 'cancel' AND target_order_id = ? AND status IN ('pending', 'claimed')
+     LIMIT 1`,
+    [target]
+  );
+  if (dup[0]) {
+    return getHangOrder(dup[0].id);
+  }
+  const px = roundPrice(price) || 0;
+  const q = Math.max(0, Math.round(Number(qty) || 0));
+  // stock 写成 CODE|C|委托号：旧版 Cloud 若不下发 action，策略仍能识别为撤单，避免再下单
+  const stockToken = `${snapStock}|C|${target}`;
+  const [result] = await db.query(
+    `INSERT INTO pending_orders (account, stock, side, price, qty, status, source, action, target_order_id)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?, 'cancel', ?)`,
+    [snapAccount, stockToken, s, px, q, source, target]
+  );
+  return getHangOrder(result.insertId);
 }
 
 async function claimHangOrder(id) {
@@ -503,7 +577,9 @@ module.exports = {
   createHangOrder,
   getHangOrder,
   listHangRequests,
+  listCancelRequests,
   listPendingCommands,
+  createCancelOrder,
   claimHangOrder,
   finishHangOrder,
 };

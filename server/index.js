@@ -125,6 +125,29 @@ app.post(
 );
 
 app.post(
+  "/api/cancel",
+  checkToken,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    try {
+      const row = await db.createCancelOrder({
+        account: body.account,
+        stock: body.stock,
+        side: body.side,
+        price: body.price,
+        qty: body.qty,
+        targetOrderId: body.targetOrderId || body.orderId,
+        source: body.source || "ui",
+      });
+      res.json({ ok: true, order: row });
+    } catch (err) {
+      const status = err.status || 500;
+      res.status(status).json({ ok: false, error: err.message || "cancel failed" });
+    }
+  })
+);
+
+app.post(
   "/api/commands/:id/claim",
   checkToken,
   asyncHandler(async (req, res) => {
@@ -143,6 +166,8 @@ app.post(
         price: Number(row.price),
         qty: Number(row.qty),
         status: row.status,
+        action: row.action || "hang",
+        targetOrderId: row.target_order_id || "",
       },
     });
   })
