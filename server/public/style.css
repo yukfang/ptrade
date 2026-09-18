@@ -30,6 +30,78 @@ header h1 {
   flex-wrap: wrap;
 }
 
+.logout-btn {
+  margin-left: auto;
+  border: 1px solid #d4cbb8;
+  background: #fff;
+  color: #5c5c5c;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.login-body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-card {
+  width: 320px;
+  background: #fff;
+  border: 1px solid #e4ddd0;
+  border-radius: 10px;
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.login-card h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.login-hint {
+  margin: 0 0 4px;
+  color: #5c5c5c;
+  font-size: 14px;
+}
+
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #5c5c5c;
+}
+
+.login-card input {
+  border: 1px solid #d4cbb8;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.login-card button {
+  margin-top: 8px;
+  border: 0;
+  background: #8a6d3b;
+  color: #fff;
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.login-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+}
+
 #latest-sync {
   margin: 0;
   color: #5c5c5c;
@@ -84,10 +156,6 @@ header h1 {
 .hang-bar.fade-out {
   animation: hang-bar-fade 3s linear forwards;
   pointer-events: none;
-}
-
-#cancel-bar.fade-out {
-  pointer-events: auto;
 }
 
 @keyframes hang-bar-fade {

@@ -24,6 +24,7 @@ Local Console  / Cloud UI      --读--> MySQL
 | [2] | 服务器下发挂单，QMT 执行 | UI 写 `pending_orders`；`qmt_hang_executor.py` 轮询执行 |
 | [3] | Web UI 展示挂盘/委托/成交 | 已有表格；改读 MySQL |
 | [4] | debug 写入 `debug_log` 表 | 进行中 |
+| 鉴权 | 网站登录 | 进行中：已加登录页；挂单/策略 API 下一步 |
 
 QMT 不直连数据库。买1/卖1 与挂单队列都经 HTTP。
 
@@ -91,8 +92,11 @@ python3 tools/pull_logs.py
 - `POST /api/debug` QMT 日志
 - `GET /api/debug?after=ID` 本机拉日志
 - `GET /api/health` 含 `appVersion`（来自 `package.json`）
+- `POST /api/login` `{ username, password }`，成功后写 HttpOnly Cookie
+- `POST /api/logout`
+- `GET /api/session` 未登录返回 401
 
-可选请求头：`X-Bridge-Token`（环境变量 `BRIDGE_TOKEN`）
+网站登录：环境变量 `CONSOLE_PASSWORD` 非空才启用（用户名默认 `CONSOLE_USER=admin`）。可选 `SESSION_SECRET`。未配密码时控制台仍公开。挂单/撤单和策略 API **尚未**走登录 Cookie；策略侧仍用可选 `X-Bridge-Token`（`BRIDGE_TOKEN`）。
 
 ## 注意
 

@@ -4,12 +4,49 @@ require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 const pkg = require("../package.json");
 const express = require("express");
 const db = require("./db");
+const auth = require("./auth");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.BRIDGE_TOKEN || "";
 
 app.use(express.json({ limit: "2mb" }));
+
+app.post("/api/login", (req, res) => {
+  const body = req.body || {};
+  const result = auth.tryLogin(body.username, body.password);
+  if (!result.ok) {
+    res.status(401).json({ ok: false, error: "用户名或密码错误" });
+    return;
+  }
+  if (!result.open) {
+    auth.setSessionCookie(req, res, result.user);
+  }
+  res.json({ ok: true, user: result.user });
+});
+
+app.post("/api/logout", (req, res) => {
+  auth.clearSessionCookie(req, res);
+  res.json({ ok: true });
+});
+
+app.get("/api/session", (req, res) => {
+  if (!auth.websiteAuthEnabled()) {
+    res.json({ ok: true, auth: false, user: auth.USER });
+    return;
+  }
+  const sess = auth.readSession(req);
+  if (!sess) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  res.json({ ok: true, auth: true, user: sess.user });
+});
+
+app.get(["/", "/index.html"], auth.requirePageLogin, (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
 function unauthorized(res) {
@@ -201,7 +238,12 @@ async function main() {
   app.listen(PORT, () => {
     console.log(`qmt-bridge listening on ${PORT}, mysql ${process.env.MYSQL_HOST}/${process.env.MYSQL_DATABASE}`);
     if (!TOKEN) {
-      console.log("BRIDGE_TOKEN is empty: API is open.");
+      console.log("BRIDGE_TOKEN is empty: strategy/API token is open.");
+    }
+    if (!auth.websiteAuthEnabled()) {
+      console.log("CONSOLE_PASSWORD is empty: website login is open.");
+    } else {
+      console.log(`website login required (user=${auth.USER})`);
     }
   });
 }

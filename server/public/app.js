@@ -625,21 +625,24 @@ function hideCancelBar(opts) {
     pendingCancel = null;
     bar.classList.remove("fade-out");
     bar.classList.add("hidden");
-  }, REQUEST_FADE_MS);
+  }, HANG_BAR_FADE_MS);
 }
 
 function ensureCancelBar() {
   let bar = document.getElementById("cancel-bar");
-  if (bar) {
+  if (bar && bar.parentNode === document.body) {
     wireCancelBarButtons();
     return bar;
+  }
+  if (bar && bar.parentNode !== document.body) {
+    bar.remove();
   }
   bar = document.createElement("div");
   bar.id = "cancel-bar";
   bar.className = "hang-bar hidden";
   bar.innerHTML = `
     <span id="cancel-bar-text"></span>
-    <button type="button" id="cancel-confirm" class="hang-btn confirm">撤单</button>
+    <button type="button" id="cancel-confirm" class="hang-btn confirm">确认</button>
     <button type="button" id="cancel-dismiss" class="hang-btn cancel">取消</button>`;
   document.body.appendChild(bar);
   wireCancelBarButtons();
@@ -680,12 +683,14 @@ function showCancelBar(info, point) {
   bar.classList.remove("hidden", "fade-out");
   bar.classList.toggle("buy", info.side === "buy");
   bar.classList.toggle("sell", info.side === "sell");
-  placeHangBar(bar, point.x, point.y);
+  const x = point && Number.isFinite(point.x) ? point.x : window.innerWidth / 2;
+  const y = point && Number.isFinite(point.y) ? point.y : window.innerHeight / 2;
+  placeHangBar(bar, x, y);
   if (cancelBarTimer) clearTimeout(cancelBarTimer);
   cancelBarTimer = setTimeout(() => {
     cancelBarTimer = null;
     hideCancelBar({ fade: true });
-  }, 50);
+  }, HANG_BAR_IDLE_MS);
 }
 
 function onHangTagClick(tag, point) {
@@ -907,6 +912,8 @@ setInterval(() => {
 loadHangQty();
 ensureHangBar();
 wireHangBarButtons();
+ensureCancelBar();
+wireCancelBarButtons();
 
 document.getElementById("ladder").addEventListener("click", (ev) => {
   const hangTag = ev.target.closest(".tag.hang.live, .tag.hang.canceling");
@@ -921,6 +928,27 @@ document.getElementById("ladder").addEventListener("click", (ev) => {
   if (!row) return;
   onPriceClick(row, { x: ev.clientX, y: ev.clientY });
 });
+
+(async function gateConsole() {
+  try {
+    const res = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+    if (res.status === 401) {
+      location.replace("/login.html");
+      return;
+    }
+    const data = await res.json();
+    const btn = document.getElementById("logout-btn");
+    if (btn && data.auth) {
+      btn.hidden = false;
+      btn.addEventListener("click", async () => {
+        await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
+        location.replace("/login.html");
+      });
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+})();
 
 (async function showAppVersion() {
   try {
