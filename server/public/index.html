@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QMT Bridge</title>
-    <link rel="stylesheet" href="./style.css?v=0.4.5" />
+    <link rel="stylesheet" href="./style.css?v=0.5.4" />
   </head>
   <body>
     <header>
@@ -14,9 +14,13 @@
       </div>
       <p id="meta">等待 QMT 推送…</p>
       <div class="toolbar">
+        <label class="qty-label">数量
+          <input id="hang-qty" type="number" step="100" min="100" value="10000" />
+        </label>
         <span class="legend">
           <span class="chip hang buy">买挂</span>
           <span class="chip hang sell">卖挂</span>
+          <span class="chip hang buy request">待执行</span>
           <span class="chip fill buy">成交</span>
           <span class="chip cancel">撤单</span>
           <span class="chip quote-bid">买1</span>
@@ -35,6 +39,6 @@
         <div id="ladder" class="ladder"></div>
       </section>
     </main>
-    <script src="./app.js?v=0.4.5"></script>
+    <script src="./app.js?v=0.5.4"></script>
   </body>
 </html>

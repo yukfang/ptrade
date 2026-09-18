@@ -21,16 +21,17 @@ Local Console  / Cloud UI      --读--> MySQL
 | 编号 | 内容 | 状态 |
 |---|---|---|
 | [1] | QMT 拉挂盘/委托/成交并 POST 到服务器 | 已通 |
-| [2] | 服务器下发挂单/撤单，QMT 执行 | 以后再做 |
+| [2] | 服务器下发挂单，QMT 执行 | UI 写 `pending_orders`；`qmt_hang_executor.py` 轮询执行 |
 | [3] | Web UI 展示挂盘/委托/成交 | 已有表格；改读 MySQL |
 | [4] | debug 写入 `debug_log` 表 | 进行中 |
 
-QMT 不直连数据库。买1/卖1 需要把更新后的 `qmt_bridge.py` 重新贴进 QMT 再运行。
+QMT 不直连数据库。买1/卖1 与挂单队列都经 HTTP。
 
-### MySQL（第一版两张表）
+### MySQL
 
 - `sync_snapshot`：QMT JSON 原样入库（`account+stock` 一行最新快照）
 - `debug_log`：追加日志
+- `pending_orders`：UI 发起的买挂/卖挂（`pending` → `claimed` → `done`/`failed`）
 
 复制 `.env.example` 为 `.env`，填实例地址。Azure 控制台加同样的环境变量后重新部署。
 
@@ -54,10 +55,10 @@ python3 tools/pull_logs.py
 
 ### QMT 侧
 
-1. 编辑 `strategies/qmt_bridge.py`：填 `ACCOUNT`（`BASE_URL` 已是线上地址）
-2. 全文贴进 QMT，**交易里实盘启动**，周期 3–5 秒
-3. 不要回测，不要点下单
-4. 打开 https://ptrade.console.enrichlife.today/ 应出现委托/成交；`updatedAt` 会开始更新
+1. `qmt_bridge.py`：实盘启动，推委托/成交/买1卖1（只读）
+2. `qmt_hang_executor.py`：另开一条实盘策略，轮询 `/api/commands` 并 `passorder` 限价挂单
+3. 不要回测。两个策略可同时跑
+4. UI：买1下方点价格 → 确认买挂；卖1上方点价格 → 确认卖挂；数量默认 10000
 
 ## 已确认能用
 
@@ -73,17 +74,21 @@ python3 tools/pull_logs.py
 - `strategies/tick_push_once.py`：tick 快照 POST httpcan（已验证）
 - `strategies/account_orders_deals.py`：实盘打印挂盘/成交明细（已验证）
 - `strategies/qmt_bridge.py`：持续推 sync + debug 到 Web
+- `strategies/qmt_hang_executor.py`：拉取 pending 挂单并实盘 `passorder`
 - `server/`：Express；写入/读取 MySQL
-- `server/schema.sql`：两张表
+- `server/schema.sql`：表结构
 - `tools/pull_logs.py`：每秒拉 `/api/debug` 到本地（可选，库通了之后可直接查 `debug_log`）
 
 ## API
 
 - `POST /api/sync` 挂盘/委托/成交
-- `GET /api/state?since=VERSION` UI 用。无内容更新返回 `{unchanged:true, version, updatedAt}`；`updatedAt` 为 epoch 毫秒（每次 QMT sync 都会刷新），前端按本机时区显示
+- `GET /api/state?since=VERSION` UI 用。无内容更新返回 `{unchanged:true, version, updatedAt, pendingHangs}`；`updatedAt` 为 epoch 毫秒（每次 QMT sync 都会刷新），前端按本机时区显示。`pendingHangs` 为尚未完成的 UI 挂单请求
+- `POST /api/hang` UI 发起买挂/卖挂（校验：买挂 < 买1，卖挂 > 卖1）
+- `GET /api/commands` QMT 拉 `pending` 队列
+- `POST /api/commands/:id/claim` 认领
+- `POST /api/commands/:id/result` 回报成功/失败
 - `POST /api/debug` QMT 日志
 - `GET /api/debug?after=ID` 本机拉日志
-- `GET /api/commands` 占位，返回 `[]`
 - `GET /api/health` 含 `appVersion`（来自 `package.json`）
 
 可选请求头：`X-Bridge-Token`（环境变量 `BRIDGE_TOKEN`）

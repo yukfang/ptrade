@@ -1,6 +1,8 @@
 const OPEN_STATUS = new Set([48, 49, 50, 51, 52, 55]);
 const CANCEL_STATUS = new Set([53, 54, 57]);
 const TICK = 0.001;
+const LADDER_PAD = 15;
+const QTY_KEY = "qmt_hang_qty";
 
 let lastMetaText = "";
 let lastSyncText = "";
@@ -10,6 +12,8 @@ let lastGoodData = null;
 let knownVersion = 0;
 let emptyStreak = 0;
 let refreshing = false;
+let pendingHang = null;
+let hangSubmitting = false;
 
 function num(value) {
   const n = Number(value);
@@ -61,7 +65,7 @@ function fmtQty(qty) {
 }
 
 function itemsKey(items) {
-  return (items || []).map((it) => `${it.side}:${it.id}:${it.qty}`).join(",");
+  return (items || []).map((it) => `${it.side}:${it.request ? "r" : "l"}:${it.id}:${it.qty}:${it.status || ""}`).join(",");
 }
 
 function buildLevels(data, tick) {
@@ -122,13 +126,37 @@ function buildLevels(data, tick) {
     );
   }
 
+  for (const row of data.pendingHangs || []) {
+    const side = row.side === "sell" ? "sell" : "buy";
+    pushItem(
+      hangs[side],
+      num(row.price),
+      {
+        qty: num(row.qty),
+        id: `req-${row.id}`,
+        side,
+        request: true,
+        status: row.status || "pending",
+      },
+      false
+    );
+  }
+
   if (num(data.bid1) > 0) idxs.push(priceToIdx(data.bid1, tick));
   if (num(data.ask1) > 0) idxs.push(priceToIdx(data.ask1, tick));
 
   if (!idxs.length) return [];
 
-  const min = Math.min(...idxs);
-  const max = Math.max(...idxs);
+  let min = Math.min(...idxs);
+  let max = Math.max(...idxs);
+  if (num(data.bid1) > 0) {
+    const bidIdx = priceToIdx(data.bid1, tick);
+    min = Math.min(min, bidIdx - LADDER_PAD);
+  }
+  if (num(data.ask1) > 0) {
+    const askIdx = priceToIdx(data.ask1, tick);
+    max = Math.max(max, askIdx + LADDER_PAD);
+  }
   const levels = [];
   for (let idx = max; idx >= min; idx -= 1) {
     levels.push({
@@ -174,12 +202,22 @@ function ladderFingerprint(levels, tick, data) {
   return `${tick}::${bid}::${ask}::` + levels.map(rowKey).join(";");
 }
 
+function hangTagHtml(item) {
+  const sell = item.side === "sell";
+  const label = sell ? "卖挂" : "买挂";
+  if (item.request) {
+    const st = item.status === "claimed" ? "执行中" : "待执行";
+    return `<span class="tag hang ${sell ? "sell" : "buy"} request">${label} ${fmtQty(item.qty)} ${st}</span>`;
+  }
+  return `<span class="tag hang ${sell ? "sell" : "buy"}">${label} ${fmtQty(item.qty)}</span>`;
+}
+
 function tagsHtml(row) {
   const hangs = [];
   const fills = [];
   const cancels = [];
-  for (const item of row.hangBuy) hangs.push(`<span class="tag hang buy">买挂 ${fmtQty(item.qty)}</span>`);
-  for (const item of row.hangSell) hangs.push(`<span class="tag hang sell">卖挂 ${fmtQty(item.qty)}</span>`);
+  for (const item of row.hangBuy) hangs.push(hangTagHtml(item));
+  for (const item of row.hangSell) hangs.push(hangTagHtml(item));
   for (const item of row.fillBuy) fills.push(`<span class="tag fill buy">买成 ${fmtQty(item.qty)}</span>`);
   for (const item of row.fillSell) fills.push(`<span class="tag fill sell">卖成 ${fmtQty(item.qty)}</span>`);
   if (row.cancelBuy) cancels.push(`<span class="tag cancel">买撤 ${fmtQty(row.cancelBuy)}</span>`);
@@ -219,18 +257,22 @@ function patchRowEl(el, row) {
 }
 
 function applyQuoteClasses(root, data, tick) {
-  const bidIdx = num(data && data.bid1) > 0 ? String(priceToIdx(data.bid1, tick)) : "";
-  const askIdx = num(data && data.ask1) > 0 ? String(priceToIdx(data.ask1, tick)) : "";
+  const bid = num(data && data.bid1);
+  const ask = num(data && data.ask1);
+  const bidIdx = bid > 0 ? priceToIdx(bid, tick) : null;
+  const askIdx = ask > 0 ? priceToIdx(ask, tick) : null;
   for (const el of root.querySelectorAll(".ladder-row[data-idx]")) {
-    el.classList.toggle("quote-bid", el.dataset.idx === bidIdx);
-    el.classList.toggle("quote-ask", el.dataset.idx === askIdx);
+    const idx = Number(el.dataset.idx);
+    el.classList.toggle("quote-bid", bidIdx != null && idx === bidIdx);
+    el.classList.toggle("quote-ask", askIdx != null && idx === askIdx);
+    const canBuy = bidIdx != null && idx < bidIdx;
+    const canSell = askIdx != null && idx > askIdx;
+    el.classList.toggle("can-buy", canBuy);
+    el.classList.toggle("can-sell", canSell);
+    el.classList.toggle("no-hang", !canBuy && !canSell);
   }
   const key = `${bidIdx}|${askIdx}`;
-  if (key !== lastQuoteKey) {
-    lastQuoteKey = key;
-    const target = root.querySelector(".quote-bid, .quote-ask");
-    if (target) target.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }
+  lastQuoteKey = key;
 }
 
 function renderLadder(levels, tick, data) {
@@ -340,6 +382,172 @@ function tickValue() {
   return TICK;
 }
 
+function hangQty() {
+  const el = document.getElementById("hang-qty");
+  const n = Math.round(Number(el && el.value));
+  return n > 0 ? n : 10000;
+}
+
+function loadHangQty() {
+  const el = document.getElementById("hang-qty");
+  if (!el) return;
+  const saved = Number(localStorage.getItem(QTY_KEY));
+  if (Number.isFinite(saved) && saved >= 100) el.value = String(saved);
+  el.addEventListener("change", () => {
+    const n = hangQty();
+    el.value = String(n);
+    localStorage.setItem(QTY_KEY, String(n));
+  });
+}
+
+function hideHangBar() {
+  pendingHang = null;
+  const bar = document.getElementById("hang-bar");
+  if (bar) bar.classList.add("hidden");
+}
+
+function ensureHangBar() {
+  let bar = document.getElementById("hang-bar");
+  if (bar && bar.parentNode === document.body) {
+    wireHangBarButtons();
+    return bar;
+  }
+  if (bar && bar.parentNode !== document.body) {
+    bar.remove();
+  }
+  bar = document.createElement("div");
+  bar.id = "hang-bar";
+  bar.className = "hang-bar hidden";
+  bar.innerHTML = `
+    <span id="hang-bar-text"></span>
+    <button type="button" id="hang-confirm" class="hang-btn confirm">确认</button>
+    <button type="button" id="hang-cancel" class="hang-btn cancel">取消</button>`;
+  document.body.appendChild(bar);
+  wireHangBarButtons();
+  return bar;
+}
+
+function wireHangBarButtons() {
+  const confirmBtn = document.getElementById("hang-confirm");
+  const cancelBtn = document.getElementById("hang-cancel");
+  if (confirmBtn && !confirmBtn.dataset.wired) {
+    confirmBtn.dataset.wired = "1";
+    confirmBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      submitHang().catch(() => {});
+    });
+  }
+  if (cancelBtn && !cancelBtn.dataset.wired) {
+    cancelBtn.dataset.wired = "1";
+    cancelBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      hideHangBar();
+    });
+  }
+}
+
+function placeHangBar(bar, clientX, clientY) {
+  bar.style.left = "0px";
+  bar.style.top = "0px";
+  const w = bar.offsetWidth || 220;
+  const h = bar.offsetHeight || 40;
+  const pad = 8;
+  let left = clientX + 12;
+  let top = clientY - Math.round(h / 2);
+  if (left + w + pad > window.innerWidth) left = clientX - w - 12;
+  if (left < pad) left = pad;
+  if (top + h + pad > window.innerHeight) top = window.innerHeight - h - pad;
+  if (top < pad) top = pad;
+  bar.style.left = `${Math.round(left)}px`;
+  bar.style.top = `${Math.round(top)}px`;
+}
+
+function showHangBar(side, price, point) {
+  pendingHang = { side, price };
+  const bar = ensureHangBar();
+  const text = document.getElementById("hang-bar-text");
+  if (!bar || !text) {
+    setMeta("确认栏加载失败，请强制刷新页面");
+    return;
+  }
+  const label = side === "buy" ? "买挂" : "卖挂";
+  text.textContent = `${label} ${price.toFixed(3)} × ${hangQty()}`;
+  bar.classList.remove("hidden");
+  bar.classList.toggle("buy", side === "buy");
+  bar.classList.toggle("sell", side === "sell");
+  const x = point && Number.isFinite(point.x) ? point.x : window.innerWidth / 2;
+  const y = point && Number.isFinite(point.y) ? point.y : window.innerHeight / 2;
+  placeHangBar(bar, x, y);
+}
+
+function onPriceClick(el, point) {
+  if (!lastGoodData || hangSubmitting) return;
+  const idx = Number(el.dataset.idx);
+  if (!Number.isFinite(idx)) return;
+  const price = idxToPrice(idx, TICK);
+  const bid = num(lastGoodData.bid1);
+  const ask = num(lastGoodData.ask1);
+  const bidIdx = bid > 0 ? priceToIdx(bid, TICK) : null;
+  const askIdx = ask > 0 ? priceToIdx(ask, TICK) : null;
+  if (bidIdx != null && idx < bidIdx) {
+    showHangBar("buy", price, point);
+    return;
+  }
+  if (askIdx != null && idx > askIdx) {
+    showHangBar("sell", price, point);
+    return;
+  }
+  hideHangBar();
+  setMeta("买挂仅限买1下方，卖挂仅限卖1上方");
+}
+
+async function submitHang() {
+  if (!pendingHang || !lastGoodData || hangSubmitting) return;
+  const { side, price } = pendingHang;
+  const qty = hangQty();
+  hangSubmitting = true;
+  try {
+    const res = await fetch("/api/hang", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        side,
+        price,
+        qty,
+        stock: lastGoodData.stock,
+        account: lastGoodData.account,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const label = side === "buy" ? "买挂" : "卖挂";
+    setMeta(`${label}请求已写入 #${data.order.id}：${price.toFixed(3)} × ${qty}（待策略执行）`);
+    hideHangBar();
+    if (lastGoodData) {
+      const next = {
+        id: data.order.id,
+        account: data.order.account,
+        stock: data.order.stock,
+        side: data.order.side,
+        price: Number(data.order.price),
+        qty: Number(data.order.qty),
+        status: data.order.status || "pending",
+      };
+      const prev = lastGoodData.pendingHangs || [];
+      if (!prev.some((x) => Number(x.id) === Number(next.id))) {
+        lastGoodData.pendingHangs = prev.concat(next);
+      }
+      renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
+    }
+  } catch (err) {
+    setMeta(`挂单失败: ${err.message}`);
+  } finally {
+    hangSubmitting = false;
+  }
+}
+
 function isUsableState(data) {
   if (!data || data.updatedAt == null || data.updatedAt === "") return false;
   const n =
@@ -362,6 +570,10 @@ async function refresh() {
       emptyStreak = 0;
       rememberVersion(data.version);
       if (data.updatedAt != null) setLatestSync(data.updatedAt);
+      if (lastGoodData && Array.isArray(data.pendingHangs)) {
+        lastGoodData.pendingHangs = data.pendingHangs;
+        renderLadder(buildLevels(lastGoodData, tick), tick, lastGoodData);
+      }
       return;
     }
 
@@ -413,7 +625,19 @@ refresh().catch((err) => {
 });
 setInterval(() => {
   refresh().catch(() => {});
-}, 1000);
+}, 3000);
+
+loadHangQty();
+ensureHangBar();
+wireHangBarButtons();
+
+document.getElementById("ladder").addEventListener("click", (ev) => {
+  const priceEl = ev.target.closest(".price");
+  if (!priceEl) return;
+  const row = priceEl.closest(".ladder-row[data-idx]");
+  if (!row) return;
+  onPriceClick(row, { x: ev.clientX, y: ev.clientY });
+});
 
 (async function showAppVersion() {
   try {

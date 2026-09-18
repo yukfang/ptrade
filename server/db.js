@@ -137,6 +137,24 @@ async function ensureSchema() {
       KEY idx_id (id)
     )
   `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pending_orders (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      account VARCHAR(64) NOT NULL DEFAULT '',
+      stock VARCHAR(32) NOT NULL,
+      side VARCHAR(8) NOT NULL,
+      price DECIMAL(16,6) NOT NULL,
+      qty INT NOT NULL DEFAULT 10000,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      source VARCHAR(32) NOT NULL DEFAULT 'ui',
+      error_message VARCHAR(512) NULL,
+      broker_order_id VARCHAR(64) NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      claimed_at DATETIME(3) NULL,
+      finished_at DATETIME(3) NULL,
+      KEY idx_status_id (status, id)
+    )
+  `);
 }
 
 async function ensureColumn(table, column, def) {
@@ -243,6 +261,7 @@ function emptySnapshot() {
     openOrders: [],
     orders: [],
     deals: [],
+    pendingHangs: [],
   };
 }
 
@@ -259,11 +278,13 @@ async function getSnapshot(since = 0) {
   }
   const row = rows[0];
   const version = Number(row.version) || 0;
+  const pendingHangs = await listHangRequests({ stock: row.stock || "" });
   if (since > 0 && version > 0 && since >= version) {
     return {
       unchanged: true,
       version,
       updatedAt: toEpochMs(row.updated_at_unix, row.updated_at),
+      pendingHangs,
     };
   }
   const payload = parsePayload(row.payload) || {};
@@ -278,6 +299,7 @@ async function getSnapshot(since = 0) {
     openOrders: payload.openOrders || [],
     orders: payload.orders || [],
     deals: payload.deals || [],
+    pendingHangs,
   };
 }
 
@@ -321,7 +343,154 @@ async function health() {
   await db.query("SELECT 1");
   const snapshot = await getSnapshot();
   const lastId = await maxDebugId();
-  return { ok: true, db: true, updatedAt: snapshot.updatedAt, version: snapshot.version || 0, logCount: lastId };
+  const [pendingRows] = await db.query(
+    `SELECT COUNT(*) AS c FROM pending_orders WHERE status IN ('pending', 'claimed')`
+  );
+  return {
+    ok: true,
+    db: true,
+    updatedAt: snapshot.updatedAt,
+    version: snapshot.version || 0,
+    logCount: lastId,
+    pendingOrders: Number(pendingRows[0] && pendingRows[0].c) || 0,
+  };
+}
+
+function roundPrice(price) {
+  return Math.round(Number(price) * 1000) / 1000;
+}
+
+async function createHangOrder({ account, stock, side, price, qty, source = "ui" }) {
+  const s = String(side || "").toLowerCase();
+  if (s !== "buy" && s !== "sell") {
+    const err = new Error("side must be buy or sell");
+    err.status = 400;
+    throw err;
+  }
+  const px = roundPrice(price);
+  const q = Math.round(Number(qty));
+  if (!(px > 0)) {
+    const err = new Error("invalid price");
+    err.status = 400;
+    throw err;
+  }
+  if (!(q > 0) || q % 100 !== 0) {
+    const err = new Error("qty must be positive multiple of 100");
+    err.status = 400;
+    throw err;
+  }
+
+  const snapshot = await getSnapshot(0);
+  const snapStock = String(stock || snapshot.stock || "").trim();
+  const snapAccount = String(account || snapshot.account || "").trim();
+  if (!snapStock) {
+    const err = new Error("stock required");
+    err.status = 400;
+    throw err;
+  }
+
+  const bid1 = Number(snapshot.bid1) || 0;
+  const ask1 = Number(snapshot.ask1) || 0;
+  if (s === "buy") {
+    if (!(bid1 > 0) || !(px < bid1 - 1e-9)) {
+      const err = new Error(`买挂只能在买1下方（买1=${bid1 || "--"}）`);
+      err.status = 400;
+      throw err;
+    }
+  } else if (!(ask1 > 0) || !(px > ask1 + 1e-9)) {
+    const err = new Error(`卖挂只能在卖1上方（卖1=${ask1 || "--"}）`);
+    err.status = 400;
+    throw err;
+  }
+
+  const db = getPool();
+  const [result] = await db.query(
+    `INSERT INTO pending_orders (account, stock, side, price, qty, status, source)
+     VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+    [snapAccount, snapStock, s, px, q, source]
+  );
+  return getHangOrder(result.insertId);
+}
+
+async function getHangOrder(id) {
+  const db = getPool();
+  const [rows] = await db.query(`SELECT * FROM pending_orders WHERE id = ?`, [id]);
+  return rows[0] || null;
+}
+
+async function listHangRequests({ stock = "" } = {}) {
+  const db = getPool();
+  const params = [];
+  let sql = `SELECT id, account, stock, side, price, qty, status, created_at
+     FROM pending_orders
+     WHERE status IN ('pending', 'claimed')`;
+  if (stock) {
+    sql += ` AND stock = ?`;
+    params.push(stock);
+  }
+  sql += ` ORDER BY id ASC`;
+  const [rows] = await db.query(sql, params);
+  return rows.map((row) => ({
+    id: row.id,
+    account: row.account,
+    stock: row.stock,
+    side: row.side,
+    price: Number(row.price),
+    qty: Number(row.qty),
+    status: row.status,
+    createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
+  }));
+}
+
+async function listPendingCommands({ limit = 20 } = {}) {
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT id, account, stock, side, price, qty, status, created_at
+     FROM pending_orders
+     WHERE status = 'pending'
+     ORDER BY id ASC
+     LIMIT ?`,
+    [Math.max(1, Math.min(100, Number(limit) || 20))]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    account: row.account,
+    stock: row.stock,
+    side: row.side,
+    price: Number(row.price),
+    qty: Number(row.qty),
+    status: row.status,
+    createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
+  }));
+}
+
+async function claimHangOrder(id) {
+  const db = getPool();
+  const [result] = await db.query(
+    `UPDATE pending_orders
+     SET status = 'claimed', claimed_at = CURRENT_TIMESTAMP(3)
+     WHERE id = ? AND status = 'pending'`,
+    [id]
+  );
+  if (!result.affectedRows) {
+    return null;
+  }
+  return getHangOrder(id);
+}
+
+async function finishHangOrder(id, { ok, brokerOrderId = "", errorMessage = "" } = {}) {
+  const db = getPool();
+  const status = ok ? "done" : "failed";
+  const [result] = await db.query(
+    `UPDATE pending_orders
+     SET status = ?, broker_order_id = ?, error_message = ?, finished_at = CURRENT_TIMESTAMP(3)
+     WHERE id = ? AND status IN ('pending', 'claimed')`,
+    [status, String(brokerOrderId || "").slice(0, 64), String(errorMessage || "").slice(0, 512), id]
+  );
+  if (!result.affectedRows) {
+    return null;
+  }
+  return getHangOrder(id);
 }
 
 module.exports = {
@@ -331,4 +500,10 @@ module.exports = {
   appendDebug,
   getDebug,
   health,
+  createHangOrder,
+  getHangOrder,
+  listHangRequests,
+  listPendingCommands,
+  claimHangOrder,
+  finishHangOrder,
 };

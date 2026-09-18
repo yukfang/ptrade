@@ -1,4 +1,4 @@
--- 第一版两张表；应用启动时也会 CREATE IF NOT EXISTS。
+-- 第一版表；应用启动时也会 CREATE IF NOT EXISTS。
 -- payload 存 QMT 推过来的完整 JSON，字段稳定后再拆列。
 
 CREATE TABLE IF NOT EXISTS sync_snapshot (
@@ -19,4 +19,22 @@ CREATE TABLE IF NOT EXISTS debug_log (
   message TEXT NOT NULL,
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   KEY idx_id (id)
+);
+
+-- UI 发起的买挂/卖挂，QMT 执行策略轮询后下单
+CREATE TABLE IF NOT EXISTS pending_orders (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  account VARCHAR(64) NOT NULL DEFAULT '',
+  stock VARCHAR(32) NOT NULL,
+  side VARCHAR(8) NOT NULL,
+  price DECIMAL(16,6) NOT NULL,
+  qty INT NOT NULL DEFAULT 10000,
+  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+  source VARCHAR(32) NOT NULL DEFAULT 'ui',
+  error_message VARCHAR(512) NULL,
+  broker_order_id VARCHAR(64) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  claimed_at DATETIME(3) NULL,
+  finished_at DATETIME(3) NULL,
+  KEY idx_status_id (status, id)
 );

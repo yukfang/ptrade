@@ -46,8 +46,68 @@ header h1 {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   flex-wrap: wrap;
+}
+
+.qty-label {
+  font-size: 13px;
+  color: #555;
+}
+
+.qty-label input {
+  width: 96px;
+  margin-left: 6px;
+  padding: 4px 6px;
+}
+
+.hang-bar {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+  pointer-events: auto;
+  white-space: nowrap;
+}
+
+.hang-bar.hidden {
+  display: none !important;
+}
+
+.hang-bar.buy {
+  background: #e8f5e9;
+  color: #1b7f3a;
+}
+
+.hang-bar.sell {
+  background: #fdecea;
+  color: #c0392b;
+}
+
+.hang-btn {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.hang-btn.confirm {
+  background: #1b1b1b;
+  color: #fff;
+}
+
+.hang-btn.cancel {
+  background: transparent;
+  color: inherit;
+  border: 1px solid currentColor;
 }
 
 .legend {
@@ -73,6 +133,26 @@ header h1 {
 .tag.hang.sell {
   background: #fdecea;
   color: #c0392b;
+}
+
+.chip.hang.request,
+.tag.hang.request {
+  background: transparent;
+  border: 1px dashed currentColor;
+  font-style: italic;
+  opacity: 0.9;
+}
+
+.chip.hang.buy.request,
+.tag.hang.buy.request {
+  color: #1b7f3a;
+  background: #f3faf4;
+}
+
+.chip.hang.sell.request,
+.tag.hang.sell.request {
+  color: #c0392b;
+  background: #fff8f7;
 }
 
 .chip.fill.buy,
@@ -207,6 +287,28 @@ header h1 {
   line-height: 28px;
   border-left: 1px solid #eee7db;
   border-right: 1px solid #eee7db;
+}
+
+.ladder-row.can-buy .price {
+  cursor: pointer;
+}
+
+.ladder-row.can-buy .price:hover {
+  background: #c8e6c9;
+  color: #1b7f3a;
+}
+
+.ladder-row.can-sell .price {
+  cursor: pointer;
+}
+
+.ladder-row.can-sell .price:hover {
+  background: #ffcdd2;
+  color: #c0392b;
+}
+
+.ladder-row.no-hang .price {
+  cursor: default;
 }
 
 .cells {

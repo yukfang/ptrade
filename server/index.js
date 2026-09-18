@@ -93,9 +93,78 @@ app.get(
   })
 );
 
-app.get("/api/commands", checkToken, (_req, res) => {
-  res.json({ ok: true, commands: [] });
-});
+app.get(
+  "/api/commands",
+  checkToken,
+  asyncHandler(async (req, res) => {
+    const commands = await db.listPendingCommands({ limit: Number(req.query.limit || 20) });
+    res.json({ ok: true, commands });
+  })
+);
+
+app.post(
+  "/api/hang",
+  checkToken,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    try {
+      const row = await db.createHangOrder({
+        account: body.account,
+        stock: body.stock,
+        side: body.side,
+        price: body.price,
+        qty: body.qty,
+        source: body.source || "ui",
+      });
+      res.json({ ok: true, order: row });
+    } catch (err) {
+      const status = err.status || 500;
+      res.status(status).json({ ok: false, error: err.message || "hang failed" });
+    }
+  })
+);
+
+app.post(
+  "/api/commands/:id/claim",
+  checkToken,
+  asyncHandler(async (req, res) => {
+    const row = await db.claimHangOrder(Number(req.params.id));
+    if (!row) {
+      res.status(409).json({ ok: false, error: "not pending" });
+      return;
+    }
+    res.json({
+      ok: true,
+      command: {
+        id: row.id,
+        account: row.account,
+        stock: row.stock,
+        side: row.side,
+        price: Number(row.price),
+        qty: Number(row.qty),
+        status: row.status,
+      },
+    });
+  })
+);
+
+app.post(
+  "/api/commands/:id/result",
+  checkToken,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const row = await db.finishHangOrder(Number(req.params.id), {
+      ok: Boolean(body.ok),
+      brokerOrderId: body.brokerOrderId || body.orderId || "",
+      errorMessage: body.error || body.errorMessage || "",
+    });
+    if (!row) {
+      res.status(409).json({ ok: false, error: "not claimable" });
+      return;
+    }
+    res.json({ ok: true, order: row });
+  })
+);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
