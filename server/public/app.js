@@ -296,14 +296,28 @@ function hangTagHtml(item) {
   return `<span class="tag hang ${sell ? "sell" : "buy"}${extra}" data-order-id="${oid}" data-side="${sell ? "sell" : "buy"}" data-qty="${num(item.qty)}">${label} ${fmtQty(item.qty)}${suffix}</span>`;
 }
 
+function fillTagHtml(items, side) {
+  if (!items.length) return "";
+  const qtys = items.map((it) => num(it.qty));
+  const n = qtys.length;
+  const label = side === "sell" ? "卖成" : "买成";
+  const same = qtys.every((q) => q === qtys[0]);
+  const total = qtys.reduce((sum, q) => sum + q, 0);
+  const text =
+    n > 1 && same
+      ? `${label} ${fmtQty(qtys[0])} x ${n}`
+      : `${label} ${fmtQty(total)}`;
+  return `<span class="tag fill ${side}" title="${n}笔">${text}</span>`;
+}
+
 function tagsHtml(row) {
   const hangs = [];
   const fills = [];
   const cancels = [];
   for (const item of row.hangBuy) hangs.push(hangTagHtml(item));
   for (const item of row.hangSell) hangs.push(hangTagHtml(item));
-  for (const item of row.fillBuy) fills.push(`<span class="tag fill buy">买成 ${fmtQty(item.qty)}</span>`);
-  for (const item of row.fillSell) fills.push(`<span class="tag fill sell">卖成 ${fmtQty(item.qty)}</span>`);
+  fills.push(fillTagHtml(row.fillBuy, "buy"));
+  fills.push(fillTagHtml(row.fillSell, "sell"));
   if (row.cancelBuy) cancels.push(`<span class="tag cancel">买撤 ${fmtQty(row.cancelBuy)}</span>`);
   if (row.cancelSell) cancels.push(`<span class="tag cancel">卖撤 ${fmtQty(row.cancelSell)}</span>`);
   return { hangs: hangs.join(""), fills: fills.join(""), cancels: cancels.join("") };
@@ -886,9 +900,15 @@ async function refresh() {
     lastGoodData = data;
     const open = (data.openOrders || []).length;
     const orders = (data.orders || []).length;
-    const deals = (data.deals || []).length;
+    const deals = data.deals || [];
+    let buyFills = 0;
+    let sellFills = 0;
+    for (const row of deals) {
+      if (optSide(row) === "sell") sellFills += 1;
+      else buyFills += 1;
+    }
     setLatestSync(data.updatedAt);
-    setMeta(`${data.stock || "-"}  挂盘${open} 委托${orders} 成交${deals}`);
+    setMeta(`${data.stock || "-"}  挂盘${open} 委托${orders} 买成${buyFills} 卖成${sellFills}`);
     renderLadder(buildLevels(data, tick), tick, data);
   } catch (err) {
     emptyStreak += 1;
