@@ -139,9 +139,8 @@ function fmtQty(qty) {
 function fmtQtyCompact(qty) {
   const n = Math.round(num(qty));
   if (!n) return "";
-  if (n >= 10000 && n % 10000 === 0) return `${n / 10000}万`;
-  if (n >= 10000) return `${Number((n / 10000).toFixed(1))}万`;
-  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}千`;
+  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}K`;
+  if (n >= 1000) return `${Number((n / 1000).toFixed(1))}K`;
   return String(n);
 }
 
@@ -319,12 +318,11 @@ function fillTagHtml(items, side) {
   const qtys = items.map((it) => num(it.qty));
   const n = qtys.length;
   const label = side === "sell" ? "卖成" : "买成";
-  const letter = side === "sell" ? "S" : "B";
   const same = qtys.every((q) => q === qtys[0]);
   const total = qtys.reduce((sum, q) => sum + q, 0);
   const unit = n > 1 && same ? qtys[0] : total;
   const full = n > 1 && same ? `${label} ${fmtQty(unit)} x ${n}` : `${label} ${fmtQty(unit)}`;
-  const compact = n > 1 && same ? `${letter} ${fmtQtyCompact(unit)} x ${n}` : `${letter} ${fmtQtyCompact(unit)}`;
+  const compact = n > 1 && same ? `${fmtQtyCompact(unit)} x ${n}` : fmtQtyCompact(unit);
   return `<span class="tag fill ${side}" title="${full}">${dualTagText(full, compact)}</span>`;
 }
 
@@ -548,8 +546,9 @@ function renderHangQty(n, opts) {
 function loadHangQty() {
   const el = document.getElementById("hang-qty");
   if (!el) return;
-  const saved = Number(localStorage.getItem(QTY_KEY));
-  renderHangQty(Number.isFinite(saved) ? saved : QTY_DEFAULT, { recenter: true, force: true });
+  const raw = localStorage.getItem(QTY_KEY);
+  const saved = raw == null || raw === "" ? NaN : Number(raw);
+  renderHangQty(Number.isFinite(saved) && saved > 0 ? saved : QTY_DEFAULT, { recenter: true, force: true });
   el.addEventListener("input", () => {
     const n = renderHangQty(el.value);
     localStorage.setItem(QTY_KEY, String(n));
