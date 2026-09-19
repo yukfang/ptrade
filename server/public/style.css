@@ -174,8 +174,7 @@ html[data-env="cloud"] .env-badge {
   color: var(--secondary);
 }
 
-.login-card input,
-.qty-label input {
+.login-card input {
   border: 0;
   border-radius: 12px;
   padding: 12px 14px;
@@ -185,8 +184,7 @@ html[data-env="cloud"] .env-badge {
   font-family: inherit;
 }
 
-.login-card input:focus,
-.qty-label input:focus {
+.login-card input:focus {
   outline: none;
   box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.22);
   background: rgba(255, 255, 255, 0.8);
@@ -236,20 +234,30 @@ html[data-env="cloud"] .env-badge {
   flex-wrap: wrap;
 }
 
-.qty-label {
-  display: inline-flex;
+.qty-control {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
+  width: min(420px, 100%);
   font-size: 13px;
   font-weight: 600;
   color: var(--secondary);
 }
 
-.qty-label input {
-  width: 108px;
-  padding: 8px 10px;
-  font-size: 15px;
+.qty-control strong {
+  min-width: 4.2em;
+  color: var(--label);
+  font-size: 17px;
   font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.qty-control input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  accent-color: var(--blue);
 }
 
 .hang-bar {
@@ -330,13 +338,6 @@ html[data-env="cloud"] .env-badge {
 .hang-btn.cancel {
   background: rgba(120, 120, 128, 0.12);
   color: var(--secondary);
-}
-
-.legend {
-  display: flex;
-  gap: 6px;
-  font-size: 12px;
-  flex-wrap: wrap;
 }
 
 .chip,

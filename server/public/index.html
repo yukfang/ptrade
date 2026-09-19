@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QMT Bridge</title>
     <link rel="icon" type="image/svg+xml" href="./favicon-local.svg" />
-    <link rel="stylesheet" href="./style.css?v=0.8.2" />
-    <script src="./site-env.js?v=0.8.2"></script>
+    <link rel="stylesheet" href="./style.css?v=0.8.5" />
+    <script src="./site-env.js?v=0.8.5"></script>
   </head>
   <body>
     <header>
@@ -17,19 +17,11 @@
       </div>
       <p id="meta">等待 QMT 推送…</p>
       <div class="toolbar">
-        <label class="qty-label">数量
-          <input id="hang-qty" type="number" step="100" min="100" value="10000" />
+        <label class="qty-control">
+          <span>默认数量</span>
+          <strong id="hang-qty-value">10000</strong>
+          <input id="hang-qty" type="range" min="5000" max="15000" step="1000" value="10000" />
         </label>
-        <span class="legend">
-          <span class="chip hang buy">买挂</span>
-          <span class="chip hang sell">卖挂</span>
-          <span class="chip hang buy request">待执行</span>
-          <span class="chip hang buy canceling">撤单中</span>
-          <span class="chip fill buy">成交</span>
-          <span class="chip cancel">撤单</span>
-          <span class="chip quote-bid">买1</span>
-          <span class="chip quote-ask">卖1</span>
-        </span>
       </div>
     </header>
     <main>
@@ -43,6 +35,6 @@
         <div id="ladder" class="ladder"></div>
       </section>
     </main>
-    <script src="./app.js?v=0.8.4"></script>
+    <script src="./app.js?v=0.8.7"></script>
   </body>
 </html>

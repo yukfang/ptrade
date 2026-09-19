@@ -3,6 +3,11 @@ const CANCEL_STATUS = new Set([53, 54, 57]);
 const TICK = 0.001;
 const LADDER_PAD = 15;
 const QTY_KEY = "qmt_hang_qty";
+const QTY_STEP = 1000;
+const QTY_PAD = 5;
+const QTY_ABS_MIN = 1000;
+const QTY_ABS_MAX = 1000000;
+const QTY_DEFAULT = 10000;
 const REQUEST_FADE_MS = 3000;
 const HANG_BAR_IDLE_MS = 5000;
 const HANG_BAR_FADE_MS = 3000;
@@ -480,20 +485,64 @@ function tickValue() {
   return TICK;
 }
 
+function snapQty(value) {
+  let n = Math.round(Number(value) / QTY_STEP) * QTY_STEP;
+  if (!Number.isFinite(n)) n = QTY_DEFAULT;
+  if (n < QTY_ABS_MIN) return QTY_ABS_MIN;
+  if (n > QTY_ABS_MAX) return QTY_ABS_MAX;
+  return n;
+}
+
+function qtyWindow(center) {
+  const value = snapQty(center);
+  let min = value - QTY_PAD * QTY_STEP;
+  let max = value + QTY_PAD * QTY_STEP;
+  if (min < QTY_ABS_MIN) {
+    min = QTY_ABS_MIN;
+    max = min + QTY_PAD * 2 * QTY_STEP;
+  }
+  if (max > QTY_ABS_MAX) {
+    max = QTY_ABS_MAX;
+    min = Math.max(QTY_ABS_MIN, max - QTY_PAD * 2 * QTY_STEP);
+  }
+  return { min, max, value };
+}
+
 function hangQty() {
   const el = document.getElementById("hang-qty");
-  const n = Math.round(Number(el && el.value));
-  return n > 0 ? n : 10000;
+  return snapQty(el && el.value);
+}
+
+function renderHangQty(n, opts) {
+  const el = document.getElementById("hang-qty");
+  const label = document.getElementById("hang-qty-value");
+  const qty = snapQty(n);
+  if (el) {
+    const minNow = Number(el.min);
+    const maxNow = Number(el.max);
+    const atEdge = qty <= minNow || qty >= maxNow;
+    if (opts && opts.recenter && (opts.force || atEdge)) {
+      const w = qtyWindow(qty);
+      el.min = String(w.min);
+      el.max = String(w.max);
+    }
+    el.value = String(qty);
+  }
+  if (label) label.textContent = String(qty);
+  return qty;
 }
 
 function loadHangQty() {
   const el = document.getElementById("hang-qty");
   if (!el) return;
   const saved = Number(localStorage.getItem(QTY_KEY));
-  if (Number.isFinite(saved) && saved >= 100) el.value = String(saved);
+  renderHangQty(Number.isFinite(saved) ? saved : QTY_DEFAULT, { recenter: true, force: true });
+  el.addEventListener("input", () => {
+    const n = renderHangQty(el.value);
+    localStorage.setItem(QTY_KEY, String(n));
+  });
   el.addEventListener("change", () => {
-    const n = hangQty();
-    el.value = String(n);
+    const n = renderHangQty(el.value, { recenter: true });
     localStorage.setItem(QTY_KEY, String(n));
   });
 }
