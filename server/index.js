@@ -228,6 +228,35 @@ app.post(
   })
 );
 
+app.get(
+  "/api/cruise",
+  auth.requireUser,
+  asyncHandler(async (req, res) => {
+    const state = await db.getCruiseState(req.username, req.query.channel);
+    res.json({ ok: true, ...state });
+  })
+);
+
+app.post(
+  "/api/cruise",
+  auth.requireUser,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const state = await db.setCruiseState(req.username, body.channel, Boolean(body.on));
+    res.json({ ok: true, ...state });
+  })
+);
+
+app.post(
+  "/api/cruise/claim",
+  auth.requireUser,
+  asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    const out = await db.claimCruiseSeen(req.username, body.channel, body.kind, body.key);
+    res.json({ ok: true, ...out });
+  })
+);
+
 app.use((err, _req, res, _next) => {
   console.error(err);
   res.status(500).json({ ok: false, error: err.message || "server error" });

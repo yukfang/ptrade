@@ -5,15 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>QMT Bridge</title>
     <link rel="icon" type="image/svg+xml" href="./favicon-local.svg" />
-    <link rel="stylesheet" href="./style.css?v=0.8.8" />
-    <script src="./site-env.js?v=0.8.8"></script>
+    <link rel="stylesheet" href="./style.css?v=0.9.4" />
+    <script src="./site-env.js?v=0.9.1"></script>
   </head>
   <body>
     <header>
       <div class="title-row">
         <h1>QMT Bridge <span id="env-badge" class="env-badge">—</span> <span id="app-version" class="app-version">v--</span></h1>
         <p id="latest-sync">Latest Syn: --</p>
-        <button type="button" id="logout-btn" class="logout-btn" hidden>退出</button>
+        <div class="header-actions">
+          <button type="button" id="sim-toggle" class="icon-btn" hidden title="调试模式" aria-label="调试模式">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+          </button>
+          <button type="button" id="logout-btn" class="icon-btn" hidden title="退出" aria-label="退出">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M15 12H3" />
+              <path d="M11 8l-4 4 4 4" />
+              <path d="M15 4h4a2 2 0 012 2v12a2 2 0 01-2 2h-4" />
+            </svg>
+          </button>
+        </div>
       </div>
       <p id="meta">等待 QMT 推送…</p>
       <div class="toolbar">
@@ -22,6 +35,7 @@
           <strong id="hang-qty-value">10000</strong>
           <input id="hang-qty" type="range" min="5000" max="15000" step="1000" value="10000" />
         </label>
+        <button type="button" id="cruise-btn" class="cruise-btn">巡航</button>
       </div>
     </header>
     <main>
@@ -35,6 +49,7 @@
         <div id="ladder" class="ladder"></div>
       </section>
     </main>
-    <script src="./app.js?v=0.8.9"></script>
+    <div id="alerts" class="alerts"></div>
+    <script src="./app.js?v=0.9.9"></script>
   </body>
 </html>

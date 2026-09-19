@@ -38,5 +38,20 @@ CREATE TABLE IF NOT EXISTS pending_orders (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   claimed_at DATETIME(3) NULL,
   finished_at DATETIME(3) NULL,
-  KEY idx_status_id (status, id)
+-- 巡航状态按登录用户 + live/sim 通道保存，本地和 Cloud 共用
+CREATE TABLE IF NOT EXISTS user_cruise (
+  username VARCHAR(64) NOT NULL,
+  channel VARCHAR(8) NOT NULL,
+  cruise_on TINYINT NOT NULL DEFAULT 0,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (username, channel)
+);
+
+CREATE TABLE IF NOT EXISTS cruise_seen (
+  username VARCHAR(64) NOT NULL,
+  channel VARCHAR(8) NOT NULL,
+  kind VARCHAR(8) NOT NULL,
+  item_key VARCHAR(190) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (username, channel, kind, item_key)
 );

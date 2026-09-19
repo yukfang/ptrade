@@ -157,6 +157,25 @@ async function ensureSchema() {
   `);
   await ensureColumn("pending_orders", "action", "VARCHAR(16) NOT NULL DEFAULT 'hang'");
   await ensureColumn("pending_orders", "target_order_id", "VARCHAR(64) NULL");
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS user_cruise (
+      username VARCHAR(64) NOT NULL,
+      channel VARCHAR(8) NOT NULL,
+      cruise_on TINYINT NOT NULL DEFAULT 0,
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (username, channel)
+    )
+  `);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS cruise_seen (
+      username VARCHAR(64) NOT NULL,
+      channel VARCHAR(8) NOT NULL,
+      kind VARCHAR(8) NOT NULL,
+      item_key VARCHAR(190) NOT NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (username, channel, kind, item_key)
+    )
+  `);
 }
 
 async function ensureColumn(table, column, def) {
@@ -283,6 +302,7 @@ async function getSnapshot(since = 0) {
   const version = Number(row.version) || 0;
   const pendingHangs = await listHangRequests({ stock: row.stock || "" });
   const pendingCancels = await listCancelRequests({ stock: row.stock || "" });
+  const failedHangs = await listFailedHangs({ stock: row.stock || "" });
   if (since > 0 && version > 0 && since >= version) {
     return {
       unchanged: true,
@@ -290,6 +310,7 @@ async function getSnapshot(since = 0) {
       updatedAt: toEpochMs(row.updated_at_unix, row.updated_at),
       pendingHangs,
       pendingCancels,
+      failedHangs,
     };
   }
   const payload = parsePayload(row.payload) || {};
@@ -306,6 +327,7 @@ async function getSnapshot(since = 0) {
     deals: payload.deals || [],
     pendingHangs,
     pendingCancels,
+    failedHangs,
   };
 }
 
@@ -443,6 +465,8 @@ function mapPendingRow(row) {
     price: Number(row.price),
     qty: Number(row.qty),
     status: row.status,
+    source: row.source || "",
+    errorMessage: row.error_message || "",
     action,
     targetOrderId: target,
     createdAt: row.created_at instanceof Date ? row.created_at.getTime() : row.created_at,
@@ -462,6 +486,24 @@ async function listHangRequests({ stock = "" } = {}) {
     params.push(stock);
   }
   sql += ` ORDER BY id ASC`;
+  const [rows] = await db.query(sql, params);
+  return rows.map(mapPendingRow);
+}
+
+async function listFailedHangs({ stock = "", limit = 30 } = {}) {
+  const db = getPool();
+  const params = [];
+  let sql = `SELECT id, account, stock, side, price, qty, status, source, action, target_order_id, error_message, created_at
+     FROM pending_orders
+     WHERE status = 'failed'
+       AND (action = 'hang' OR action IS NULL OR action = '')
+       AND stock NOT LIKE '%|C|%'`;
+  if (stock) {
+    sql += ` AND stock = ?`;
+    params.push(stock);
+  }
+  sql += ` ORDER BY id DESC LIMIT ?`;
+  params.push(Math.max(1, Math.min(100, Number(limit) || 30)));
   const [rows] = await db.query(sql, params);
   return rows.map(mapPendingRow);
 }
@@ -567,6 +609,82 @@ async function finishHangOrder(id, { ok, brokerOrderId = "", errorMessage = "" }
   return getHangOrder(id);
 }
 
+function cruiseChannel(value) {
+  return String(value || "").toLowerCase() === "sim" ? "sim" : "live";
+}
+
+function dealKeyFromRow(row) {
+  const tid = String((row && (row.m_strTradeID || row.trade_id || row.m_strDealID || row.m_strExecID)) || "");
+  if (tid) return `t:${tid}`;
+  const oid = String((row && (row.order_id || row.m_strOrderSysID)) || "");
+  const t = String((row && (row.m_strTradeTime || row.time)) || "");
+  const px = Number((row && (row.m_dPrice || row.price)) || 0);
+  const qty = Number((row && (row.m_nVolume || row.qty)) || 0);
+  return `o:${oid}:${t}:${px}:${qty}`;
+}
+
+async function listCruiseSeen(username, channel, kind) {
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT item_key FROM cruise_seen WHERE username = ? AND channel = ? AND kind = ?`,
+    [username, channel, kind]
+  );
+  return rows.map((row) => String(row.item_key));
+}
+
+async function getCruiseState(username, channel) {
+  const ch = cruiseChannel(channel);
+  const db = getPool();
+  const [rows] = await db.query(
+    `SELECT cruise_on FROM user_cruise WHERE username = ? AND channel = ?`,
+    [username, ch]
+  );
+  return {
+    on: Boolean(rows[0] && rows[0].cruise_on),
+    channel: ch,
+    seenDeals: await listCruiseSeen(username, ch, "deal"),
+    seenFails: await listCruiseSeen(username, ch, "fail"),
+  };
+}
+
+async function setCruiseState(username, channel, on) {
+  const ch = cruiseChannel(channel);
+  const db = getPool();
+  await db.query(
+    `INSERT INTO user_cruise (username, channel, cruise_on)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE cruise_on = VALUES(cruise_on)`,
+    [username, ch, on ? 1 : 0]
+  );
+  if (on) {
+    const snap = await getSnapshot(0);
+    const keys = (snap.deals || []).map(dealKeyFromRow).filter(Boolean);
+    if (keys.length) {
+      const values = keys.map((key) => [username, ch, "deal", key]);
+      await db.query(
+        `INSERT IGNORE INTO cruise_seen (username, channel, kind, item_key) VALUES ?`,
+        [values]
+      );
+    }
+  } else {
+    await db.query(`DELETE FROM cruise_seen WHERE username = ? AND channel = ?`, [username, ch]);
+  }
+  return getCruiseState(username, ch);
+}
+
+async function claimCruiseSeen(username, channel, kind, key) {
+  const ch = cruiseChannel(channel);
+  const item = String(key || "").slice(0, 190);
+  const k = kind === "fail" ? "fail" : "deal";
+  if (!item) return { claimed: false };
+  const db = getPool();
+  const [result] = await db.query(
+    `INSERT IGNORE INTO cruise_seen (username, channel, kind, item_key) VALUES (?, ?, ?, ?)`,
+    [username, ch, k, item]
+  );
+  return { claimed: Boolean(result.affectedRows) };
+}
+
 module.exports = {
   ensureSchema,
   saveSnapshot,
@@ -578,8 +696,12 @@ module.exports = {
   getHangOrder,
   listHangRequests,
   listCancelRequests,
+  listFailedHangs,
   listPendingCommands,
   createCancelOrder,
   claimHangOrder,
   finishHangOrder,
+  getCruiseState,
+  setCruiseState,
+  claimCruiseSeen,
 };

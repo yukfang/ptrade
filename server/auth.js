@@ -122,9 +122,28 @@ function requirePageLogin(req, res, next) {
   return next();
 }
 
+function currentUser(req) {
+  const sess = readSession(req);
+  if (sess && sess.user) return sess.user;
+  if (!websiteAuthEnabled()) return USER;
+  return null;
+}
+
+function requireUser(req, res, next) {
+  const user = currentUser(req);
+  if (!user) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
+  }
+  req.username = user;
+  return next();
+}
+
 module.exports = {
   websiteAuthEnabled,
   readSession,
+  currentUser,
+  requireUser,
   setSessionCookie,
   clearSessionCookie,
   tryLogin,

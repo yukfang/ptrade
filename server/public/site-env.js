@@ -24,6 +24,8 @@
   var baseTitle = "QMT Bridge";
   if (location.pathname.indexOf("login") !== -1) {
     document.title = label + " · 登录 · " + baseTitle;
+  } else if (local && /(?:^|[?&])mode=sim(?:&|$)/.test(location.search)) {
+    document.title = label + " · SIM · " + baseTitle;
   } else {
     document.title = label + " · " + baseTitle;
   }

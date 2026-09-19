@@ -30,6 +30,11 @@ let hangBarTimer = null;
 let hangBarFadeTimer = null;
 let fadeCleanupTimer = null;
 let lastPendingList = [];
+let cruiseOn = false;
+let cruiseBusy = false;
+const seenDeals = new Set();
+const seenFails = new Set();
+const CRUISE_GAP = 0.011;
 const fadingHangs = new Map();
 
 function num(value) {
@@ -305,7 +310,7 @@ function hangTagHtml(item) {
   if (item.request) {
     const st = item.status === "claimed" ? "执行中" : "待执行";
     const fade = item.fading ? " fade-out" : "";
-    return `<span class="tag hang ${sell ? "sell" : "buy"} request${fade}">${label} ${fmtQty(item.qty)} ${st}</span>`;
+    return `<span class="tag hang ${sell ? "sell" : "buy"} request${fade}" data-order-id="${String(item.id || "").replace(/"/g, "")}" data-side="${sell ? "sell" : "buy"}" data-qty="${num(item.qty)}">${label} ${fmtQty(item.qty)} ${st}</span>`;
   }
   const extra = item.cancelPending ? " canceling" : " live";
   const suffix = item.cancelPending ? " 撤单中" : "";
@@ -492,6 +497,266 @@ function rememberVersion(version) {
   }
 }
 
+function isLocalHost() {
+  return /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname);
+}
+
+function isSimMode() {
+  return isLocalHost() && new URLSearchParams(location.search).get("mode") === "sim";
+}
+
+function setSimMode(on) {
+  const url = new URL(location.href);
+  if (on) url.searchParams.set("mode", "sim");
+  else url.searchParams.delete("mode");
+  location.assign(url.pathname + url.search + url.hash);
+}
+
+function applySimChrome() {
+  const on = isSimMode();
+  document.documentElement.dataset.sim = on ? "1" : "0";
+  const btn = document.getElementById("sim-toggle");
+  if (btn) {
+    btn.hidden = !isLocalHost();
+    btn.classList.toggle("active", on);
+    btn.title = on ? "退出调试模式" : "进入调试模式";
+  }
+}
+
+function orderIdOf(row) {
+  return String(row.order_id || row.m_strOrderSysID || row.m_strOrderRef || "");
+}
+
+function rebuildOpenOrders(orders) {
+  return (orders || []).filter((row) => OPEN_STATUS.has(statusCode(row)));
+}
+
+function snapshotForSync(data) {
+  const orders = JSON.parse(JSON.stringify(data.orders || []));
+  return {
+    account: data.account || "SIM",
+    stock: data.stock || "159781.SZ",
+    bid1: num(data.bid1),
+    ask1: num(data.ask1),
+    lastPrice: num(data.lastPrice) || num(data.bid1),
+    source: "sim",
+    orders,
+    openOrders: rebuildOpenOrders(orders),
+    deals: JSON.parse(JSON.stringify(data.deals || [])),
+  };
+}
+
+function makeSimOrder({ side, price, qty, status, remaining, traded, cancelAmt, id }) {
+  const oid = id || `sim-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 6)}`;
+  const buy = side !== "sell";
+  return {
+    m_strOptName: buy ? "买入" : "卖出",
+    m_dLimitPrice: Number(price),
+    price: Number(price),
+    m_nVolumeTotalOriginal: qty,
+    qty,
+    m_nVolumeTotal: remaining != null ? remaining : qty,
+    m_nVolumeTraded: traded || 0,
+    m_dCancelAmount: cancelAmt || 0,
+    m_nOrderStatus: status,
+    status,
+    m_strOrderSysID: oid,
+    order_id: oid,
+  };
+}
+
+async function postSimSnapshot(data) {
+  const payload = snapshotForSync(data);
+  const res = await fetch("/api/sync", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
+  lastGoodData = {
+    ...payload,
+    pendingHangs: (data && data.pendingHangs) || (lastGoodData && lastGoodData.pendingHangs) || [],
+    pendingCancels: (data && data.pendingCancels) || (lastGoodData && lastGoodData.pendingCancels) || [],
+    updatedAt: out.updatedAt || Date.now(),
+    version: out.version || 0,
+  };
+  rememberVersion(lastGoodData.version);
+  setLatestSync(lastGoodData.updatedAt);
+  renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
+  if (cruiseOn && isSimMode()) {
+    await cruiseTick(lastGoodData);
+  }
+  return lastGoodData;
+}
+
+async function ensureSimQuote() {
+  if (lastGoodData && (num(lastGoodData.bid1) > 0 || num(lastGoodData.ask1) > 0)) {
+    return lastGoodData;
+  }
+  return postSimSnapshot({
+    account: "SIM",
+    stock: "159781.SZ",
+    bid1: 1.066,
+    ask1: 1.067,
+    lastPrice: 1.066,
+    orders: [],
+    deals: [],
+  });
+}
+
+async function simPlaceHang(side, price, qty) {
+  const snap = await ensureSimQuote();
+  const orders = (snap.orders || []).slice();
+  orders.push(makeSimOrder({ side, price, qty, status: 50 }));
+  snap.orders = orders;
+  await postSimSnapshot(snap);
+}
+
+function patchOrder(orders, orderId, fn) {
+  const oid = String(orderId);
+  let found = false;
+  for (const row of orders) {
+    if (orderIdOf(row) === oid) {
+      fn(row);
+      found = true;
+    }
+  }
+  return found;
+}
+
+async function simAdvanceToFill(info) {
+  const snap = await ensureSimQuote();
+  await finishPendingRequest(info, info.orderId);
+  const orders = (snap.orders || []).slice();
+  const qty = num(info.qty);
+  const found = patchOrder(orders, info.orderId, (row) => {
+    const original = num(row.m_nVolumeTotalOriginal || row.qty || qty);
+    row.m_nOrderStatus = 56;
+    row.status = 56;
+    row.m_nVolumeTraded = original;
+    row.m_nVolumeTotal = 0;
+  });
+  if (!found) {
+    orders.push(
+      makeSimOrder({
+        side: info.side,
+        price: info.price,
+        qty,
+        status: 56,
+        remaining: 0,
+        traded: qty,
+        id: info.orderId,
+      })
+    );
+  }
+  snap.orders = orders;
+  snap.deals = (snap.deals || []).concat([
+    {
+      m_strOptName: info.side === "sell" ? "卖出" : "买入",
+      m_dPrice: Number(info.price),
+      m_nVolume: qty,
+      qty,
+      m_strOrderSysID: info.orderId,
+      order_id: info.orderId,
+    },
+  ]);
+  await postSimSnapshot(snap);
+}
+
+async function simAdvanceToCancel(info) {
+  const snap = await ensureSimQuote();
+  await finishPendingRequest(info, info.orderId);
+  const orders = (snap.orders || []).slice();
+  const qty = num(info.qty);
+  const found = patchOrder(orders, info.orderId, (row) => {
+    const original = num(row.m_nVolumeTotalOriginal || row.qty || qty);
+    row.m_nOrderStatus = 54;
+    row.status = 54;
+    row.m_dCancelAmount = original;
+    row.m_nVolumeTotal = 0;
+  });
+  if (!found) {
+    orders.push(
+      makeSimOrder({
+        side: info.side,
+        price: info.price,
+        qty,
+        status: 54,
+        remaining: 0,
+        cancelAmt: qty,
+        id: info.orderId,
+      })
+    );
+  }
+  snap.orders = orders;
+  await postSimSnapshot(snap);
+}
+
+async function finishPendingRequest(info, brokerOrderId) {
+  if (!info || !info.request) return;
+  const raw = String(info.orderId || "").replace(/^req-/, "");
+  if (lastGoodData) {
+    lastGoodData.pendingHangs = (lastGoodData.pendingHangs || []).filter((x) => String(x.id) !== raw);
+  }
+  fadingHangs.delete(raw);
+  lastPendingList = lastPendingList.filter((x) => String(x.id) !== raw);
+  const id = Number(raw);
+  if (!Number.isFinite(id) || id <= 0) return;
+  await fetch(`/api/commands/${id}/result`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ok: true, brokerOrderId: brokerOrderId || "" }),
+  }).catch(() => {});
+}
+
+async function simAdvanceToLive(info) {
+  const snap = await ensureSimQuote();
+  const oid = `sim-${Date.now().toString(36)}`;
+  await finishPendingRequest(info, oid);
+  const orders = (snap.orders || []).slice();
+  orders.push(
+    makeSimOrder({
+      side: info.side,
+      price: info.price,
+      qty: num(info.qty),
+      status: 50,
+      id: oid,
+    })
+  );
+  snap.orders = orders;
+  snap.pendingHangs = (lastGoodData && lastGoodData.pendingHangs) || [];
+  await postSimSnapshot(snap);
+}
+
+function clearSimBarActions(bar) {
+  if (!bar) return;
+  for (const el of bar.querySelectorAll(".sim-btn")) el.remove();
+}
+
+function setSimBarActions(bar, actions) {
+  clearSimBarActions(bar);
+  if (!isSimMode() || !bar) return;
+  for (const act of actions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hang-btn sim-btn";
+    btn.textContent = act.label;
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      Promise.resolve(act.run())
+        .then(() => {
+          hideHangBar();
+          hideCancelBar();
+        })
+        .catch((err) => setMeta(`模拟失败: ${err.message}`));
+    });
+    bar.appendChild(btn);
+  }
+}
+
 function tickValue() {
   return TICK;
 }
@@ -666,6 +931,7 @@ function showHangBar(side, price, point) {
   const x = point && Number.isFinite(point.x) ? point.x : window.innerWidth / 2;
   const y = point && Number.isFinite(point.y) ? point.y : window.innerHeight / 2;
   placeHangBar(bar, x, y);
+  setSimBarActions(bar, []);
   if (hangBarTimer) clearTimeout(hangBarTimer);
   hangBarTimer = setTimeout(() => {
     hangBarTimer = null;
@@ -750,7 +1016,13 @@ function showCancelBar(info, point) {
   const text = document.getElementById("cancel-bar-text");
   if (!bar || !text) return;
   const label = info.side === "sell" ? "卖挂" : "买挂";
-  text.textContent = `撤 ${label} ${Number(info.price).toFixed(3)} × ${info.qty}`;
+  const confirmBtn = document.getElementById("cancel-confirm");
+  if (confirmBtn) confirmBtn.hidden = Boolean(info.request);
+  if (info.request) {
+    text.textContent = `待执行 ${label} ${Number(info.price).toFixed(3)} × ${info.qty}`;
+  } else {
+    text.textContent = `撤 ${label} ${Number(info.price).toFixed(3)} × ${info.qty}`;
+  }
   if (cancelBarFadeTimer) {
     clearTimeout(cancelBarFadeTimer);
     cancelBarFadeTimer = null;
@@ -761,6 +1033,26 @@ function showCancelBar(info, point) {
   const x = point && Number.isFinite(point.x) ? point.x : window.innerWidth / 2;
   const y = point && Number.isFinite(point.y) ? point.y : window.innerHeight / 2;
   placeHangBar(bar, x, y);
+  const simActs = [];
+  if (isSimMode()) {
+    if (info.request) {
+      simActs.push({
+        label: "推进至已报",
+        run: () => simAdvanceToLive(info),
+      });
+    }
+    simActs.push({
+      label: info.side === "sell" ? "推进至卖成" : "推进至买成",
+      run: () => simAdvanceToFill(info),
+    });
+    if (!info.request) {
+      simActs.push({
+        label: "推进至已撤",
+        run: () => simAdvanceToCancel(info),
+      });
+    }
+  }
+  setSimBarActions(bar, simActs);
   if (cancelBarTimer) clearTimeout(cancelBarTimer);
   cancelBarTimer = setTimeout(() => {
     cancelBarTimer = null;
@@ -770,7 +1062,8 @@ function showCancelBar(info, point) {
 
 function onHangTagClick(tag, point) {
   if (!lastGoodData || cancelSubmitting) return;
-  if (tag.classList.contains("request")) return;
+  const request = tag.classList.contains("request");
+  if (request && !isSimMode()) return;
   const orderId = String(tag.dataset.orderId || "");
   if (!orderId) return;
   if (tag.classList.contains("canceling")) {
@@ -786,6 +1079,7 @@ function onHangTagClick(tag, point) {
       side: tag.dataset.side === "sell" ? "sell" : "buy",
       qty: num(tag.dataset.qty),
       price,
+      request,
     },
     point
   );
@@ -837,32 +1131,44 @@ async function submitCancel() {
 
 function onPriceClick(el, point) {
   hideCancelBar();
-  if (!lastGoodData || hangSubmitting) return;
-  const idx = Number(el.dataset.idx);
-  if (!Number.isFinite(idx)) return;
-  const price = idxToPrice(idx, TICK);
-  const bid = num(lastGoodData.bid1);
-  const ask = num(lastGoodData.ask1);
-  const bidIdx = bid > 0 ? priceToIdx(bid, TICK) : null;
-  const askIdx = ask > 0 ? priceToIdx(ask, TICK) : null;
-  if (bidIdx != null && idx <= bidIdx) {
-    showHangBar("buy", price, point);
+  if (hangSubmitting) return;
+  const go = () => {
+    if (!lastGoodData) return;
+    const idx = Number(el.dataset.idx);
+    if (!Number.isFinite(idx)) return;
+    const price = idxToPrice(idx, TICK);
+    const bid = num(lastGoodData.bid1);
+    const ask = num(lastGoodData.ask1);
+    const bidIdx = bid > 0 ? priceToIdx(bid, TICK) : null;
+    const askIdx = ask > 0 ? priceToIdx(ask, TICK) : null;
+    if (bidIdx != null && idx <= bidIdx) {
+      showHangBar("buy", price, point);
+      return;
+    }
+    if (askIdx != null && idx >= askIdx) {
+      showHangBar("sell", price, point);
+      return;
+    }
+    hideHangBar();
+    setMeta("买挂仅限买1及下方，卖挂仅限卖1及上方");
+  };
+  if (isSimMode() && !lastGoodData) {
+    ensureSimQuote()
+      .then(go)
+      .catch((err) => setMeta(`模拟失败: ${err.message}`));
     return;
   }
-  if (askIdx != null && idx >= askIdx) {
-    showHangBar("sell", price, point);
-    return;
-  }
-  hideHangBar();
-  setMeta("买挂仅限买1及下方，卖挂仅限卖1及上方");
+  if (!lastGoodData) return;
+  go();
 }
 
 async function submitHang() {
-  if (!pendingHang || !lastGoodData || hangSubmitting) return;
+  if (!pendingHang || hangSubmitting) return;
   const { side, price } = pendingHang;
   const qty = hangQty();
   hangSubmitting = true;
   try {
+    if (!lastGoodData) return;
     const res = await fetch("/api/hang", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -913,13 +1219,210 @@ function isUsableState(data) {
   return n > 0 || num(data.bid1) > 0 || num(data.ask1) > 0;
 }
 
+function dealKey(row) {
+  const tid = String(row.m_strTradeID || row.trade_id || row.m_strDealID || row.m_strExecID || "");
+  if (tid) return `t:${tid}`;
+  const oid = String(row.order_id || row.m_strOrderSysID || "");
+  const t = String(row.m_strTradeTime || row.time || "");
+  return `o:${oid}:${t}:${dealPrice(row)}:${num(row.m_nVolume || row.qty)}`;
+}
+
+function pushAlert(text) {
+  const root = document.getElementById("alerts");
+  if (!root) return;
+  const el = document.createElement("div");
+  el.className = "alert";
+  const msg = document.createElement("span");
+  msg.textContent = text;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.setAttribute("aria-label", "关闭");
+  close.textContent = "×";
+  close.addEventListener("click", () => el.remove());
+  el.append(msg, close);
+  root.appendChild(el);
+}
+
+function noteCruiseFails(list) {
+  if (!cruiseOn) return;
+  Promise.resolve()
+    .then(async () => {
+      for (const row of list || []) {
+        if (row.source && row.source !== "cruise") continue;
+        const id = String(row.id);
+        if (seenFails.has(id)) continue;
+        const claimed = await claimCruiseKey("fail", id);
+        seenFails.add(id);
+        if (!claimed) continue;
+        const label = row.side === "sell" ? "卖挂" : "买挂";
+        pushAlert(`${label}失败 ${Number(row.price).toFixed(3)} × ${row.qty}：${row.errorMessage || "执行失败"}`);
+      }
+    })
+    .catch(() => {});
+}
+
+function cruiseChannel() {
+  return isSimMode() ? "sim" : "live";
+}
+
+function paintCruise(on) {
+  cruiseOn = on;
+  document.body.classList.toggle("cruise-on", on);
+  const btn = document.getElementById("cruise-btn");
+  if (btn) {
+    btn.textContent = on ? "退出巡航" : "巡航";
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  const qty = document.getElementById("hang-qty");
+  if (qty) qty.disabled = on && !isSimMode();
+}
+
+function applyCruiseFromServer(state) {
+  if (!state) return;
+  const on = Boolean(state.on);
+  const was = cruiseOn;
+  seenDeals.clear();
+  seenFails.clear();
+  for (const key of state.seenDeals || []) seenDeals.add(String(key));
+  for (const id of state.seenFails || []) seenFails.add(String(id));
+  paintCruise(on);
+  if (on && !was) {
+    const locked = on && !isSimMode();
+    if (locked) {
+      hideHangBar();
+      hideCancelBar();
+    }
+    setMeta(locked ? "巡航中，页面已锁定" : "巡航中，可继续模拟");
+  }
+}
+
+async function fetchCruiseState() {
+  const res = await fetch(`/api/cruise?channel=${encodeURIComponent(cruiseChannel())}`, {
+    cache: "no-store",
+    credentials: "same-origin",
+  });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  return data && data.ok ? data : null;
+}
+
+async function syncCruiseFromServer() {
+  const state = await fetchCruiseState();
+  if (state) applyCruiseFromServer(state);
+}
+
+async function restoreCruise() {
+  localStorage.removeItem("qmt_cruise");
+  localStorage.removeItem("qmt_cruise_deals");
+  localStorage.removeItem("qmt_cruise_fails");
+  await syncCruiseFromServer();
+}
+
+async function setCruise(on) {
+  try {
+    const res = await fetch("/api/cruise", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel: cruiseChannel(), on }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    applyCruiseFromServer(data);
+    const locked = data.on && !isSimMode();
+    setMeta(data.on ? (locked ? "巡航中，页面已锁定" : "巡航中，可继续模拟") : "已退出巡航");
+  } catch (err) {
+    pushAlert(`巡航同步失败：${err.message}`);
+  }
+}
+
+async function claimCruiseKey(kind, key) {
+  const res = await fetch("/api/cruise/claim", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel: cruiseChannel(), kind, key }),
+  });
+  const data = await res.json().catch(() => ({}));
+  return Boolean(data.claimed);
+}
+
+async function cruiseOnDeal(data, row) {
+  const side = optSide(row);
+  if (side !== "buy" && side !== "sell") return;
+  const px = dealPrice(row);
+  const qty = Math.round(num(row.m_nVolume || row.qty));
+  if (!(px > 0) || !(qty > 0)) return;
+  const nextSide = side === "sell" ? "buy" : "sell";
+  const nextPx = Math.round((px + (side === "sell" ? -CRUISE_GAP : CRUISE_GAP)) * 1000) / 1000;
+  const label = nextSide === "buy" ? "买挂" : "卖挂";
+  try {
+    const res = await fetch("/api/hang", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        side: nextSide,
+        price: nextPx,
+        qty,
+        stock: data.stock,
+        account: data.account,
+        source: "cruise",
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    const order = body.order || {};
+    if (lastGoodData && order.id) {
+      const next = {
+        id: order.id,
+        side: order.side || nextSide,
+        price: Number(order.price),
+        qty: Number(order.qty),
+        status: order.status || "pending",
+      };
+      const prev = lastGoodData.pendingHangs || [];
+      if (!prev.some((x) => Number(x.id) === Number(next.id))) {
+        lastGoodData.pendingHangs = prev.concat(next);
+      }
+      renderLadder(buildLevels(lastGoodData, tickValue()), tickValue(), lastGoodData);
+    }
+  } catch (err) {
+    pushAlert(`${label}失败 ${nextPx.toFixed(3)} × ${qty}：${err.message}`);
+  }
+}
+
+async function cruiseTick(data) {
+  if (!cruiseOn || !data || cruiseBusy) return;
+  noteCruiseFails(data.failedHangs);
+  if (data.unchanged || !Array.isArray(data.deals)) return;
+  const fresh = [];
+  for (const row of data.deals) {
+    const key = dealKey(row);
+    if (seenDeals.has(key)) continue;
+    const claimed = await claimCruiseKey("deal", key);
+    seenDeals.add(key);
+    if (claimed) fresh.push(row);
+  }
+  if (!fresh.length) return;
+  cruiseBusy = true;
+  try {
+    for (const row of fresh) {
+      await cruiseOnDeal(data, row);
+    }
+  } finally {
+    cruiseBusy = false;
+  }
+}
+
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const res = await fetch(`/api/state?since=${knownVersion}`, { cache: "no-store" });
+    const res = await fetch(`/api/state?since=${knownVersion}`, { cache: "no-store", credentials: "same-origin" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    await syncCruiseFromServer();
     const tick = tickValue();
 
     if (data.unchanged) {
@@ -931,6 +1434,7 @@ async function refresh() {
         if (Array.isArray(data.pendingCancels)) lastGoodData.pendingCancels = data.pendingCancels;
         renderLadder(buildLevels(lastGoodData, tick), tick, lastGoodData);
       }
+      cruiseTick(data).catch(() => {});
       return;
     }
 
@@ -971,6 +1475,7 @@ async function refresh() {
     setLatestSync(data.updatedAt);
     setMeta(`${data.stock || "-"}  挂盘${open} 委托${orders} 买成${buyFills} 卖成${sellFills}`);
     renderLadder(buildLevels(data, tick), tick, data);
+    cruiseTick(data).catch(() => {});
   } catch (err) {
     emptyStreak += 1;
     if (!lastGoodData) {
@@ -983,6 +1488,7 @@ async function refresh() {
   }
 }
 
+restoreCruise();
 refresh().catch((err) => {
   setMeta(`拉取失败: ${err.message}`);
 });
@@ -991,13 +1497,21 @@ setInterval(() => {
 }, 3000);
 
 loadHangQty();
+const cruiseBtn = document.getElementById("cruise-btn");
+if (cruiseBtn) cruiseBtn.addEventListener("click", () => setCruise(!cruiseOn));
+applySimChrome();
+const simToggle = document.getElementById("sim-toggle");
+if (simToggle) {
+  simToggle.addEventListener("click", () => setSimMode(!isSimMode()));
+}
 ensureHangBar();
 wireHangBarButtons();
 ensureCancelBar();
 wireCancelBarButtons();
 
 document.getElementById("ladder").addEventListener("click", (ev) => {
-  const hangTag = ev.target.closest(".tag.hang.live, .tag.hang.canceling");
+  if (cruiseOn && !isSimMode()) return;
+  const hangTag = ev.target.closest(".tag.hang.live, .tag.hang.canceling, .tag.hang.request");
   if (hangTag) {
     ev.stopPropagation();
     onHangTagClick(hangTag, { x: ev.clientX, y: ev.clientY });
@@ -1017,9 +1531,8 @@ document.getElementById("ladder").addEventListener("click", (ev) => {
       location.replace("/login.html");
       return;
     }
-    const data = await res.json();
     const btn = document.getElementById("logout-btn");
-    if (btn && data.auth) {
+    if (btn) {
       btn.hidden = false;
       btn.addEventListener("click", async () => {
         await fetch("/api/logout", { method: "POST", credentials: "same-origin" });
