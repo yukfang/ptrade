@@ -82,6 +82,28 @@ header h1 {
   letter-spacing: 0;
 }
 
+.env-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  vertical-align: 3px;
+}
+
+html[data-env="local"] .env-badge {
+  background: rgba(255, 159, 10, 0.18);
+  color: #c93400;
+}
+
+html[data-env="cloud"] .env-badge {
+  background: rgba(0, 122, 255, 0.16);
+  color: var(--blue);
+}
+
 .title-row {
   display: flex;
   align-items: center;
