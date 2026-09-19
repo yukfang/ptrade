@@ -441,6 +441,11 @@ header h1 {
   color: #c0392b;
 }
 
+.ladder-row.quote-bid.can-buy .price:hover,
+.ladder-row.quote-ask.can-sell .price:hover {
+  animation: none;
+}
+
 .ladder-row.no-hang .price {
   cursor: default;
 }

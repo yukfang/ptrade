@@ -349,8 +349,8 @@ function applyQuoteClasses(root, data, tick) {
     const idx = Number(el.dataset.idx);
     el.classList.toggle("quote-bid", bidIdx != null && idx === bidIdx);
     el.classList.toggle("quote-ask", askIdx != null && idx === askIdx);
-    const canBuy = bidIdx != null && idx < bidIdx;
-    const canSell = askIdx != null && idx > askIdx;
+    const canBuy = bidIdx != null && idx <= bidIdx;
+    const canSell = askIdx != null && idx >= askIdx;
     el.classList.toggle("can-buy", canBuy);
     el.classList.toggle("can-sell", canSell);
     el.classList.toggle("no-hang", !canBuy && !canSell);
@@ -770,16 +770,16 @@ function onPriceClick(el, point) {
   const ask = num(lastGoodData.ask1);
   const bidIdx = bid > 0 ? priceToIdx(bid, TICK) : null;
   const askIdx = ask > 0 ? priceToIdx(ask, TICK) : null;
-  if (bidIdx != null && idx < bidIdx) {
+  if (bidIdx != null && idx <= bidIdx) {
     showHangBar("buy", price, point);
     return;
   }
-  if (askIdx != null && idx > askIdx) {
+  if (askIdx != null && idx >= askIdx) {
     showHangBar("sell", price, point);
     return;
   }
   hideHangBar();
-  setMeta("买挂仅限买1下方，卖挂仅限卖1上方");
+  setMeta("买挂仅限买1及下方，卖挂仅限卖1及上方");
 }
 
 async function submitHang() {

@@ -398,13 +398,13 @@ async function createHangOrder({ account, stock, side, price, qty, source = "ui"
   const bid1 = Number(snapshot.bid1) || 0;
   const ask1 = Number(snapshot.ask1) || 0;
   if (s === "buy") {
-    if (!(bid1 > 0) || !(px < bid1 - 1e-9)) {
-      const err = new Error(`买挂只能在买1下方（买1=${bid1 || "--"}）`);
+    if (!(bid1 > 0) || !(px <= bid1 + 1e-9)) {
+      const err = new Error(`买挂只能在买1及下方（买1=${bid1 || "--"}）`);
       err.status = 400;
       throw err;
     }
-  } else if (!(ask1 > 0) || !(px > ask1 + 1e-9)) {
-    const err = new Error(`卖挂只能在卖1上方（卖1=${ask1 || "--"}）`);
+  } else if (!(ask1 > 0) || !(px >= ask1 - 1e-9)) {
+    const err = new Error(`卖挂只能在卖1及上方（卖1=${ask1 || "--"}）`);
     err.status = 400;
     throw err;
   }
