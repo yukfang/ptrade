@@ -136,6 +136,19 @@ function fmtQty(qty) {
   return String(Math.round(qty));
 }
 
+function fmtQtyCompact(qty) {
+  const n = Math.round(num(qty));
+  if (!n) return "";
+  if (n >= 10000 && n % 10000 === 0) return `${n / 10000}万`;
+  if (n >= 10000) return `${Number((n / 10000).toFixed(1))}万`;
+  if (n >= 1000 && n % 1000 === 0) return `${n / 1000}千`;
+  return String(n);
+}
+
+function dualTagText(full, compact) {
+  return `<span class="tag-full">${full}</span><span class="tag-compact">${compact}</span>`;
+}
+
 function itemsKey(items) {
   return (items || [])
     .map((it) => `${it.side}:${it.request ? "r" : "l"}:${it.id}:${it.qty}:${it.status || ""}:${it.fading ? "f" : ""}:${it.cancelPending ? "c" : ""}`)
@@ -306,13 +319,13 @@ function fillTagHtml(items, side) {
   const qtys = items.map((it) => num(it.qty));
   const n = qtys.length;
   const label = side === "sell" ? "卖成" : "买成";
+  const letter = side === "sell" ? "S" : "B";
   const same = qtys.every((q) => q === qtys[0]);
   const total = qtys.reduce((sum, q) => sum + q, 0);
-  const text =
-    n > 1 && same
-      ? `${label} ${fmtQty(qtys[0])} x ${n}`
-      : `${label} ${fmtQty(total)}`;
-  return `<span class="tag fill ${side}" title="${n}笔">${text}</span>`;
+  const unit = n > 1 && same ? qtys[0] : total;
+  const full = n > 1 && same ? `${label} ${fmtQty(unit)} x ${n}` : `${label} ${fmtQty(unit)}`;
+  const compact = n > 1 && same ? `${letter} ${fmtQtyCompact(unit)} x ${n}` : `${letter} ${fmtQtyCompact(unit)}`;
+  return `<span class="tag fill ${side}" title="${full}">${dualTagText(full, compact)}</span>`;
 }
 
 function tagsHtml(row) {

@@ -637,6 +637,10 @@ main {
   flex: 0 0 auto;
 }
 
+.tag-compact {
+  display: none;
+}
+
 @media (max-width: 720px) {
   body {
     padding: 12px;
@@ -654,7 +658,20 @@ main {
 
   .ladder-head,
   .ladder-row {
-    grid-template-columns: 72px minmax(110px, 1fr) minmax(110px, 1fr) minmax(90px, 1fr);
+    grid-template-columns: 64px minmax(100px, 1.1fr) minmax(72px, 0.9fr);
     padding: 0 8px;
+  }
+
+  .ladder-head > :nth-child(4),
+  .ladder-row .cancels {
+    display: none;
+  }
+
+  .tag-full {
+    display: none;
+  }
+
+  .tag-compact {
+    display: inline;
   }
 }
